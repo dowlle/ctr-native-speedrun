@@ -72,6 +72,26 @@ EVENT_KIND = {
 }
 
 
+def warn(message):
+    """Best-effort stderr, which may be invalid when spawned without a console."""
+    try:
+        print(message, file=sys.stderr)
+    except Exception:
+        pass
+
+
+def acquire_lock(port):
+    """Binds a local port so a second bridge exits instead of double-sending."""
+    sock = socket.socket()
+    try:
+        sock.bind(("127.0.0.1", port))
+        sock.listen(1)
+    except OSError:
+        sock.close()
+        return None
+    return sock
+
+
 def format_gametime(milliseconds):
     """LiveSplit timespan text, for example 0:02:08.128."""
     milliseconds = int(milliseconds)
@@ -390,7 +410,7 @@ class LiveSplitClient:
                     # LiveSplit may not be running yet; keep going and retry
                     # on the next command rather than exiting the bridge.
                     if not self.warned:
-                        print(f"bridge: LiveSplit not reachable at {self.host}:{self.port}; will keep trying", file=sys.stderr)
+                        warn(f"bridge: LiveSplit not reachable at {self.host}:{self.port}; will keep trying")
                         self.warned = True
                     return
                 time.sleep(0.5)
@@ -515,11 +535,19 @@ def main():
     parser.add_argument("--poll", type=float, default=0.02)
     parser.add_argument("--duration", type=float, help="stop after this many seconds")
     parser.add_argument("--idle-timeout", type=float, help="in surface mode, exit after the surface stops changing for this many seconds")
+    parser.add_argument("--lock-port", type=int, default=0, help="exit if another bridge already holds this local port")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--exit-at-eof", action="store_true", help="process current events then exit")
     args = parser.parse_args()
 
     client = LiveSplitClient(args.host, args.port, dry_run=args.dry_run)
+
+    lock = None
+    if args.lock_port:
+        lock = acquire_lock(args.lock_port)
+        if lock is None:
+            warn("bridge: another instance is already running")
+            return 0
 
     try:
         if args.source == "events":

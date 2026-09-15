@@ -9,10 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NATIVE_SPEEDRUN_ROUTE_FILE   "config/any-nmg.cfg"
-#define NATIVE_SPEEDRUN_LOG_FILE     "speedrun-events.log"
-#define NATIVE_SPEEDRUN_SURFACE_FILE "speedrun-surface.bin"
-#define NATIVE_SPEEDRUN_ROUTE_MAX    8192
+#define NATIVE_SPEEDRUN_ROUTE_FILE    "config/any-nmg.cfg"
+#define NATIVE_SPEEDRUN_LOG_FILE      "speedrun-events.log"
+#define NATIVE_SPEEDRUN_SURFACE_FILE  "speedrun-surface.bin"
+#define NATIVE_SPEEDRUN_BRIDGE_SCRIPT "speedrun-bridge.py"
+#define NATIVE_SPEEDRUN_BRIDGE_LOCK   16835
+#define NATIVE_SPEEDRUN_ROUTE_MAX     8192
 
 // The read-only surface lives in its own named section so an external tool can
 // find it by section rather than by a hardcoded offset. The static initializer
@@ -76,6 +78,61 @@ internal void NativeSpeedrunRuntime_LoadRoute(struct NativeSpeedrunRoute *route)
 	Platform_Log("[CTR Speedrun] route config loaded: %d splits\n", splits);
 }
 
+// Starts the timer bridge next to the executable, if it is present and python
+// is available. The bridge takes a lock so a manual start cannot double up. Set
+// CTR_SPEEDRUN_NO_BRIDGE=1 to skip it, or CTR_SPEEDRUN_PYTHON to pick an
+// interpreter. The handle is intentionally left open so the child outlives this
+// call; the bridge exits on its own after the surface goes idle.
+internal void NativeSpeedrunRuntime_StartBridge(void)
+{
+	if (getenv("CTR_SPEEDRUN_NO_BRIDGE") != NULL)
+	{
+		return;
+	}
+
+	FILE *probe = fopen(NATIVE_SPEEDRUN_BRIDGE_SCRIPT, "rb");
+	if (probe == NULL)
+	{
+		return;
+	}
+	fclose(probe);
+
+	const char *python = getenv("CTR_SPEEDRUN_PYTHON");
+	if ((python == NULL) || (python[0] == '\0'))
+	{
+#if defined(_WIN32)
+		python = "python";
+#else
+		python = "python3";
+#endif
+	}
+
+	char lockPort[16];
+	snprintf(lockPort, sizeof(lockPort), "%d", NATIVE_SPEEDRUN_BRIDGE_LOCK);
+
+	const char *args[] = {python,
+	                      NATIVE_SPEEDRUN_BRIDGE_SCRIPT,
+	                      "--source",
+	                      "surface",
+	                      "--surface-file",
+	                      NATIVE_SPEEDRUN_SURFACE_FILE,
+	                      "--events",
+	                      NATIVE_SPEEDRUN_LOG_FILE,
+	                      "--idle-timeout",
+	                      "300",
+	                      "--lock-port",
+	                      lockPort,
+	                      NULL};
+
+	if (SDL_CreateProcess(args, false) == NULL)
+	{
+		Platform_Log("[CTR Speedrun] bridge could not start: %s\n", SDL_GetError());
+		return;
+	}
+
+	Platform_Log("[CTR Speedrun] bridge started\n");
+}
+
 void NativeSpeedrunRuntime_Init(void)
 {
 	struct NativeSpeedrunRoute route;
@@ -92,6 +149,8 @@ void NativeSpeedrunRuntime_Init(void)
 	}
 
 	s_speedrunReady = 1;
+
+	NativeSpeedrunRuntime_StartBridge();
 }
 
 void NativeSpeedrunRuntime_Update(struct GameTracker *gGT)

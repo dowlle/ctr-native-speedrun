@@ -94,15 +94,16 @@ python3 tools/speedrun-bridge.py --source events --events speedrun-events.log --
 
 On run start the bridge sends `switchto gametime`, so LiveSplit ranks the client's loadless Game Time rather than real time. LiveSplit 1.8.37 has no command to load splits, so the route is opened once in the GUI (`File`, `Open Splits`).
 
-## Launcher
+## Bridge autostart
 
-Two layouts. Pick one.
+When built with `CTR_SPEEDRUN`, the client starts the bridge itself on launch, if `speedrun-bridge.py` sits next to the executable and python is on `PATH`. The bridge takes a lock on a local port, so a manual start cannot double up, and it exits on its own once the game stops updating the surface. This keeps Steam launching `ctr_native.exe` directly, so Steam Input keeps working.
 
-**Integrated (one click, no controller passthrough).** Point the Steam non-Steam shortcut at `speedrun-launch.vbs` (windowless) or `speedrun-launch.bat`. Steam launches the launcher, which starts the bridge and then the client. Steam tracks the launcher process, so the overlay and Steam Input may not attach to the game; on Artemis a controller did not work this way. Use this only with a native controller or keyboard.
+Set LiveSplit `Settings`, `Startup Behavior` to `TCP` once, so its server comes up with LiveSplit and you never start it by hand.
 
-**Split (controller-safe).** Keep the Steam shortcut on `ctr_native.exe` so Steam tracks the game and Steam Input works. Start the bridge separately with `start-bridge.vbs` (windowless) or `start-bridge.bat`. The bridge waits for the surface and exits on its own once the game stops updating it, so start order does not matter.
+- `CTR_SPEEDRUN_NO_BRIDGE=1` skips the bridge.
+- `CTR_SPEEDRUN_PYTHON` overrides the interpreter (default `python` on Windows, `python3` elsewhere).
 
-The bridge survives LiveSplit not being running and retries, so either layout tolerates a late LiveSplit.
+`start-bridge.vbs` and `start-bridge.bat` remain for running the bridge by hand, and `speedrun-launch.vbs` and `speedrun-launch.bat` are a single-entry launcher that starts the bridge and the client together, but Steam then tracks the launcher and Steam Input may not attach.
 
 The protocol is the real LiveSplit Server protocol (`src/LiveSplit.Core/Server/CommandServer.cs`); `tools/test-speedrun-bridge.py` drives it against a stub server and runs under ctest, including a full surface-polling run against a fixture process.
 
