@@ -440,7 +440,7 @@ def surface_loop(reader, client, poll, duration, idle_timeout=None):
     while duration is None or (time.time() - start) < duration:
         surface = reader.read()
         if surface is None:
-            if idle_timeout is not None and (time.time() - last_change) > idle_timeout:
+            if idle_timeout is not None and have_sample and (time.time() - last_change) > idle_timeout:
                 return 0
             time.sleep(poll)
             continue
@@ -474,7 +474,7 @@ def surface_loop(reader, client, poll, duration, idle_timeout=None):
         last_active = active
         last_loadless = surface["loadlessMS"]
 
-        if idle_timeout is not None and (time.time() - last_change) > idle_timeout:
+        if idle_timeout is not None and have_sample and (time.time() - last_change) > idle_timeout:
             return 0
 
         time.sleep(poll)

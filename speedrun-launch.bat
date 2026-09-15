@@ -7,7 +7,7 @@ rem when the client stops updating the surface.
 
 where python >nul 2>&1
 if %ERRORLEVEL%==0 (
-    start "" /min python "%~dp0speedrun-bridge.py" --source surface --surface-file "%~dp0speedrun-surface.bin" --events "%~dp0speedrun-events.log" --idle-timeout 20
+    start "" /min python "%~dp0speedrun-bridge.py" --source surface --surface-file "%~dp0speedrun-surface.bin" --events "%~dp0speedrun-events.log" --idle-timeout 60
 ) else (
     echo [speedrun] python not found; starting the client without the timer bridge.
 )

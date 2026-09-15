@@ -8,5 +8,5 @@ Set fso = CreateObject("Scripting.FileSystemObject")
 dirPath = fso.GetParentFolderName(WScript.ScriptFullName)
 shell.CurrentDirectory = dirPath
 
-shell.Run "python """ & dirPath & "\speedrun-bridge.py"" --source surface --surface-file """ & dirPath & "\speedrun-surface.bin"" --events """ & dirPath & "\speedrun-events.log"" --idle-timeout 20", 0, False
+shell.Run "python """ & dirPath & "\speedrun-bridge.py"" --source surface --surface-file """ & dirPath & "\speedrun-surface.bin"" --events """ & dirPath & "\speedrun-events.log"" --idle-timeout 60", 0, False
 shell.Run """" & dirPath & "\ctr_native.exe""", 1, True
