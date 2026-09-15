@@ -69,8 +69,27 @@ The surface lives in its own named section:
 
 A consumer locates the section and rejects a mismatched ABI version. The section is compile-verified on the host and on the Linux game build; runtime behaviour still needs a Steam session.
 
+## Timer bridge
+
+`tools/speedrun-bridge.py` tails the run log and drives LiveSplit Server over TCP, mapping events to commands: `run_start` to reset, set game time to zero and start; `split` and `run_end` to set the game time and split; `reset` to reset.
+
+LiveSplit setup, one time:
+
+1. Install LiveSplit. Version 1.8.37 is already on Artemis under `D:\pythonProjects\CTR-Archipelago\Clean\tools\livesplit`.
+2. In LiveSplit, `Edit Layout`, `Add`, `Control`, `LiveSplit Server`. Leave the port at the default 16834.
+
+Run the bridge:
+
+```
+python3 tools/speedrun-bridge.py --events speedrun-events.log --port 16834
+```
+
+`--dry-run` prints the commands without connecting, and `--exit-at-eof` processes the current events then exits.
+
+The protocol is the real LiveSplit Server protocol (`src/LiveSplit.Core/Server/CommandServer.cs`); `tools/test-speedrun-bridge.py` drives it against a stub server and runs under ctest.
+
 ## Not yet done
 
-- The companion timer bridge.
-- Build identity stamping and the signed release pipeline.
+- A surface-polling mode for continuous game time, rather than event-time updates.
+- Build identity stamping is done; the verifier-side allowlist service is not.
 - A runtime Steam session to validate behaviour, as opposed to compile and link.
