@@ -87,8 +87,9 @@ internal void NativeSpeedrun_RestartRun(struct NativeSpeedrunState *state)
 
 void NativeSpeedrun_Update(struct NativeSpeedrunState *state, const struct NativeSpeedrunFrame *frame)
 {
-	state->lastEvent.type = NATIVE_SPEEDRUN_EVENT_NONE;
-	state->lastEvent.sequence = state->sequence;
+	// lastEvent persists across frames on purpose: a consumer that polls the
+	// surface may read after the frame that emitted it, and must still see the
+	// event. Only the per-frame batch is reset here.
 	state->eventCount = 0;
 
 	const b32 gameplay = (frame->mainGameState == NATIVE_SPEEDRUN_MAIN_GAME_GAMEPLAY);

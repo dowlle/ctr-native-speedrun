@@ -197,7 +197,8 @@ static void TestFinishEdgeOnlyFiresOnce(void)
 	CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_SPLIT);
 
 	Frame(3, ADVENTURE, IDLE, 32, 32, 1, 0); // still finished, no edge
-	CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_NONE);
+	CHECK_INT(g_state.eventCount, 0);
+	CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_SPLIT); // persists for a late poller
 	CHECK_INT(g_state.segmentIndex, 1);
 }
 
