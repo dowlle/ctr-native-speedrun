@@ -96,9 +96,13 @@ On run start the bridge sends `switchto gametime`, so LiveSplit ranks the client
 
 ## Launcher
 
-`speedrun-launch.bat` starts the bridge, then the client, and the bridge exits by itself via `--idle-timeout` once the client stops updating the surface. `speedrun-launch.vbs` does the same with no console window. Point the Steam non-Steam shortcut at one of them instead of the exe if you want the timer started for you.
+Two layouts. Pick one.
 
-Note: when Steam launches a launcher rather than the exe, Steam tracks the launcher process, so the overlay and Steam Input may not attach to the game. If controller input matters, keep the shortcut on `ctr_native.exe` and start the bridge separately.
+**Integrated (one click, no controller passthrough).** Point the Steam non-Steam shortcut at `speedrun-launch.vbs` (windowless) or `speedrun-launch.bat`. Steam launches the launcher, which starts the bridge and then the client. Steam tracks the launcher process, so the overlay and Steam Input may not attach to the game; on Artemis a controller did not work this way. Use this only with a native controller or keyboard.
+
+**Split (controller-safe).** Keep the Steam shortcut on `ctr_native.exe` so Steam tracks the game and Steam Input works. Start the bridge separately with `start-bridge.vbs` (windowless) or `start-bridge.bat`. The bridge waits for the surface and exits on its own once the game stops updating it, so start order does not matter.
+
+The bridge survives LiveSplit not being running and retries, so either layout tolerates a late LiveSplit.
 
 The protocol is the real LiveSplit Server protocol (`src/LiveSplit.Core/Server/CommandServer.cs`); `tools/test-speedrun-bridge.py` drives it against a stub server and runs under ctest, including a full surface-polling run against a fixture process.
 
