@@ -77,6 +77,7 @@
 #if defined(CTR_SPEEDRUN)
 #include "platform/native_speedrun.c"
 #include "platform/native_speedrun_runtime.c"
+#include "platform/native_buildid.c"
 #endif
 
 #ifndef CC

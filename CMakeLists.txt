@@ -5,7 +5,7 @@ include(CheckCCompilerFlag)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
-set(CTR_NATIVE_VERSION "0.1.0-beta.7.1")
+set(CTR_NATIVE_VERSION "0.1.0-speedrun")
 
 if(NOT CMAKE_C_COMPILER_TARGET MATCHES "i.86" AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "i.86")
     set(CMAKE_C_FLAGS "-m32 ${CMAKE_C_FLAGS}")
@@ -36,11 +36,15 @@ execute_process(
 if(CTR_NATIVE_GIT_DIRTY EQUAL 0)
     set(CTR_NATIVE_BUILD_ID "${CTR_NATIVE_GIT_HASH}")
 else()
-    string(TIMESTAMP CTR_NATIVE_BUILD_TIMESTAMP "%Y%m%d%H%M%S" UTC)
-    set(CTR_NATIVE_BUILD_ID "${CTR_NATIVE_GIT_HASH}-dirty-${CTR_NATIVE_BUILD_TIMESTAMP}")
+    # No wall-clock timestamp: it would make otherwise identical builds differ.
+    set(CTR_NATIVE_BUILD_ID "${CTR_NATIVE_GIT_HASH}-dirty")
 endif()
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse -Wno-error -g")
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    # Keep absolute source paths out of the binary, for reproducible builds.
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ffile-prefix-map=${CMAKE_SOURCE_DIR}=.")
+endif()
 
 function(ctr_native_add_label_warning_if_supported target warning flag_check)
     set(saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
@@ -92,6 +96,7 @@ target_compile_definitions(ctr_native PRIVATE
     BUILD=926
     CTR_INTERNAL
     CTR_NATIVE_VERSION=\"${CTR_NATIVE_VERSION}\"
+    CTR_NATIVE_COMMIT=\"${CTR_NATIVE_GIT_HASH}\"
     CTR_NATIVE_BUILD_ID=\"${CTR_NATIVE_BUILD_ID}\"
 )
 
