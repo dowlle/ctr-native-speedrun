@@ -56,6 +56,10 @@ function(ctr_native_add_label_warning_if_supported target warning flag_check)
     endif()
 endfunction()
 
+option(CTR_BUILD_GAME "Build the standalone game executable and its SDL dependency" ON)
+
+if(CTR_BUILD_GAME)
+
 # SDL3
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
@@ -103,4 +107,16 @@ target_link_libraries(ctr_native SDL3::SDL3)
 target_link_options(ctr_native PRIVATE -static-libgcc)
 if(WIN32)
     target_link_options(ctr_native PRIVATE -static)
+endif()
+
+endif()
+
+# Speedrun module host tests. Pure C, no SDL and no game sources.
+option(CTR_SPEEDRUN_TESTS "Build host tests for the speedrun module" ON)
+if(CTR_SPEEDRUN_TESTS)
+    enable_testing()
+    add_executable(test_native_speedrun tools/test-native-speedrun.c platform/native_speedrun.c)
+    target_include_directories(test_native_speedrun PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_options(test_native_speedrun PRIVATE -O0 -g -Wall -Wextra)
+    add_test(NAME native_speedrun COMMAND test_native_speedrun)
 endif()
