@@ -54,7 +54,7 @@ int main(int argc, char **argv)
 #endif
 	fflush(stdout);
 
-	SLEEP_MS(150);
+	SLEEP_MS(500);
 
 	surface.flags = NATIVE_SPEEDRUN_SURFACE_ACTIVE;
 	surface.lastEventType = NATIVE_SPEEDRUN_EVENT_RUN_START;

@@ -406,7 +406,11 @@ class LiveSplitClient:
 
 def follow(events_path, client, poll, exit_at_eof):
     """Tails the event log and forwards new events until interrupted."""
+    # Tail from the end unless replaying for a test, so a bridge started mid
+    # session does not replay old runs into LiveSplit.
     offset = 0
+    if not exit_at_eof and os.path.exists(events_path):
+        offset = os.path.getsize(events_path)
     while True:
         if not os.path.exists(events_path):
             if exit_at_eof:
@@ -452,25 +456,35 @@ def surface_loop(reader, client, poll, duration, idle_timeout=None):
             time.sleep(poll)
             continue
 
-        if (
-            not have_sample
-            or surface["sequence"] != last_event_sequence
-            or surface["loadlessMS"] != last_loadless
-            or bool(surface["flags"] & FLAG_ACTIVE) != last_active
-        ):
-            last_change = time.time()
+        if not have_sample:
+            # Do not act on whatever the surface happened to contain at startup,
+            # such as a previous session's run. Wait for a change.
             have_sample = True
+            last_change = time.time()
+            last_event_sequence = surface["lastEventSequence"]
+            last_active = bool(surface["flags"] & FLAG_ACTIVE)
+            last_loadless = surface["loadlessMS"]
+            time.sleep(poll)
+            continue
 
         active = bool(surface["flags"] & FLAG_ACTIVE)
         event_sequence = surface["lastEventSequence"]
         event_type = surface["lastEventType"]
         total = surface["lastEventTotalTimeMS"]
 
+        changed = (
+            event_sequence != last_event_sequence
+            or surface["loadlessMS"] != last_loadless
+            or active != last_active
+        )
+        if changed:
+            last_change = time.time()
+
         if active and not last_active:
             for command in commands_for_kind("run_start"):
                 client.send(command)
 
-        if (last_event_sequence is None or event_sequence != last_event_sequence) and event_type != EVENT_RUN_START:
+        if (event_sequence != last_event_sequence) and event_type != EVENT_RUN_START:
             for command in commands_for_kind(EVENT_KIND.get(event_type), total):
                 client.send(command)
 
@@ -481,7 +495,7 @@ def surface_loop(reader, client, poll, duration, idle_timeout=None):
         last_active = active
         last_loadless = surface["loadlessMS"]
 
-        if idle_timeout is not None and have_sample and (time.time() - last_change) > idle_timeout:
+        if idle_timeout is not None and (time.time() - last_change) > idle_timeout:
             return 0
 
         time.sleep(poll)
