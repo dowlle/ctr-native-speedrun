@@ -22,6 +22,7 @@ A verifier reads the section instead of parsing stdout or hashing the whole file
 
 - The dirty marker carries no wall-clock timestamp, so an unchanged tree hashes the same.
 - Absolute source paths are stripped with `-ffile-prefix-map`, so the binary does not depend on where it was built.
+- `SOURCE_DATE_EPOCH` defaults to the commit time when not already set.
 - Toolchain and dependency versions must be pinned for a byte-identical rebuild. That is not yet enforced; until it is, the published artifact hash is the identity anchor, not a rebuild.
 
 ## Manifest and signing

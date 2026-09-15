@@ -29,7 +29,7 @@ A line-based text format, one split per line:
 <levelID> <kind> <name>
 ```
 
-`kind` is `normal` or `boss`. Blank lines and `#` comments are ignored. Names may contain spaces. The shipped Any% NMG route is `config/any-nmg.cfg`.
+`kind` is `normal` or `boss`. Blank lines and `#` comments are ignored. Names may contain spaces. The shipped Any% NMG route is `config/any-nmg.cfg`; set `CTR_SPEEDRUN_ROUTE` to override the path.
 
 Boss races reuse a track level id with the `ADVENTURE_BOSS` mode bit, so the same level id can appear twice, once normal and once boss. The mapping comes from `game/232/R232.c` `bossRaceLevelIDs`: the hub order is Gem Stone Valley (Oxide final, Oxide Station), then N. Sanity Beach (Ripper Roo, Roo's Tubes), The Lost Ruins (Papu Papu, Papu's Pyramid), Glacier Park (Komodo Joe, Dragon Mines) and Citadel City (Pinstripe, Hot Air Skyway).
 
@@ -41,7 +41,7 @@ Each emitted event is one text line, for example:
 seq=1 type=split level=3 mode=524288 segment=0 pos=1 seg_ms=128 total_ms=128 loadless_ms=128 rta_ms=128
 ```
 
-The line format is stable enough to tail and parse, and it is the record a verifier would inspect.
+Events are run start, run end, split, reset, level enter, level exit and race finish. A route race that completes emits a race finish and a split in the same frame, so the log records both the raw event and the route progress. The line format is stable enough to tail and parse, and it is the record a verifier would inspect.
 
 ## Build and test
 
@@ -67,7 +67,7 @@ The surface lives in its own named section:
 - First word is the magic `0x43545253`
 - Second word is the ABI version, currently `1`
 
-A consumer locates the section and rejects a mismatched ABI version. The section is compile-verified on the host and on the Linux game build; runtime behaviour still needs a Steam session.
+It carries the clocks, the segment index, run flags, and the last event including its finish position. A consumer locates the section and rejects a mismatched ABI version. The section is compile-verified on the host and on the Linux game build; runtime behaviour still needs a Steam session.
 
 ## Timer bridge
 

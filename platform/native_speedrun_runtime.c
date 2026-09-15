@@ -6,6 +6,7 @@
 
 #include <SDL3/SDL.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define NATIVE_SPEEDRUN_ROUTE_FILE   "config/any-nmg.cfg"
@@ -45,10 +46,16 @@ internal void NativeSpeedrunRuntime_LoadRoute(struct NativeSpeedrunRoute *route)
 {
 	memset(route, 0, sizeof(*route));
 
-	FILE *file = fopen(NATIVE_SPEEDRUN_ROUTE_FILE, "rb");
+	const char *path = getenv("CTR_SPEEDRUN_ROUTE");
+	if ((path == NULL) || (path[0] == '\0'))
+	{
+		path = NATIVE_SPEEDRUN_ROUTE_FILE;
+	}
+
+	FILE *file = fopen(path, "rb");
 	if (file == NULL)
 	{
-		Platform_Log("[CTR Speedrun] no route config (%s), running clocks only\n", NATIVE_SPEEDRUN_ROUTE_FILE);
+		Platform_Log("[CTR Speedrun] no route config (%s), running clocks only\n", path);
 		return;
 	}
 
@@ -67,11 +74,6 @@ internal void NativeSpeedrunRuntime_LoadRoute(struct NativeSpeedrunRoute *route)
 	}
 
 	Platform_Log("[CTR Speedrun] route config loaded: %d splits\n", splits);
-}
-
-const struct NativeSpeedrunSurface *NativeSpeedrunRuntime_GetSurface(void)
-{
-	return &g_ctr_speedrun_surface;
 }
 
 void NativeSpeedrunRuntime_Init(void)
@@ -114,31 +116,34 @@ void NativeSpeedrunRuntime_Update(struct GameTracker *gGT)
 	if (gGT->drivers[0] != NULL)
 	{
 		frame.playerFinished = (gGT->drivers[0]->actionsFlagSet & ACTION_RACE_FINISHED) != 0;
+		if (frame.playerFinished != 0)
+		{
+			frame.finishPosition = gGT->drivers[0]->driverRank + 1;
+		}
 	}
 
 	NativeSpeedrun_Update(&s_speedrunState, &frame);
 	NativeSpeedrun_WriteSurface(&s_speedrunState, &g_ctr_speedrun_surface);
 	NativeSpeedrunRuntime_PublishSurface();
 
-	if (s_speedrunState.lastEvent.type == NATIVE_SPEEDRUN_EVENT_NONE)
+	for (u32 i = 0; i < s_speedrunState.eventCount; i++)
 	{
-		return;
-	}
+		char line[256];
 
-	char line[256];
-	if (NativeSpeedrun_FormatEvent(&s_speedrunState, line, sizeof(line)) <= 0)
-	{
-		return;
-	}
+		if (NativeSpeedrun_FormatEvent(&s_speedrunState, &s_speedrunState.events[i], line, sizeof(line)) <= 0)
+		{
+			continue;
+		}
 
-	if (s_speedrunLog == NULL)
-	{
-		s_speedrunLog = fopen(NATIVE_SPEEDRUN_LOG_FILE, "ab");
-	}
+		if (s_speedrunLog == NULL)
+		{
+			s_speedrunLog = fopen(NATIVE_SPEEDRUN_LOG_FILE, "ab");
+		}
 
-	if (s_speedrunLog != NULL)
-	{
-		fputs(line, s_speedrunLog);
-		fflush(s_speedrunLog);
+		if (s_speedrunLog != NULL)
+		{
+			fputs(line, s_speedrunLog);
+			fflush(s_speedrunLog);
+		}
 	}
 }

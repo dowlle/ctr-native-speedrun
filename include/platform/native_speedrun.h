@@ -20,12 +20,14 @@
 
 // include/namespace_Main.h
 #define NATIVE_SPEEDRUN_LOAD_IDLE (-1)
+#define NATIVE_SPEEDRUN_MAIN_GAME_GAMEPLAY 3
 
 // include/namespace_Level.h, the starting adventure hub.
 #define NATIVE_SPEEDRUN_HUB_N_SANITY_BEACH 0x1a
 
-#define NATIVE_SPEEDRUN_MAX_SPLITS 64
-#define NATIVE_SPEEDRUN_NAME_MAX   32
+#define NATIVE_SPEEDRUN_MAX_SPLITS       64
+#define NATIVE_SPEEDRUN_NAME_MAX         32
+#define NATIVE_SPEEDRUN_MAX_FRAME_EVENTS 4
 
 enum NativeSpeedrunEventType
 {
@@ -34,6 +36,9 @@ enum NativeSpeedrunEventType
 	NATIVE_SPEEDRUN_EVENT_SPLIT,
 	NATIVE_SPEEDRUN_EVENT_RUN_END,
 	NATIVE_SPEEDRUN_EVENT_RESET,
+	NATIVE_SPEEDRUN_EVENT_LEVEL_ENTER,
+	NATIVE_SPEEDRUN_EVENT_LEVEL_EXIT,
+	NATIVE_SPEEDRUN_EVENT_RACE_FINISH,
 };
 
 enum NativeSpeedrunSplitKind
@@ -67,6 +72,7 @@ struct NativeSpeedrunFrame
 	s32 numPlayers;     // gGT->numPlyrCurrGame
 	s32 demoMode;       // gGT->boolDemoMode
 	s32 playerFinished; // P1 actionsFlagSet & ACTION_RACE_FINISHED
+	s32 finishPosition; // P1 driverRank + 1 when finished, else 0
 };
 
 struct NativeSpeedrunEvent
@@ -108,6 +114,7 @@ struct NativeSpeedrunSurface
 	u32 lastEventSequence;
 	u32 lastEventSegmentTimeMS;
 	u32 lastEventTotalTimeMS;
+	s32 lastEventFinishPosition;
 };
 
 struct NativeSpeedrunState
@@ -122,12 +129,17 @@ struct NativeSpeedrunState
 	u32 rtaMS;
 	struct NativeSpeedrunEvent lastEvent;
 
+	// All events emitted this frame, so the run log can record each one.
+	struct NativeSpeedrunEvent events[NATIVE_SPEEDRUN_MAX_FRAME_EVENTS];
+	u32 eventCount;
+
 	// Route and integration bookkeeping. Do not read directly.
 	struct NativeSpeedrunRoute route;
 	u64 runStartWallMS;
 	u64 prevWallMS;
 	u32 havePrevWall;
 	s32 prevPlayerFinished;
+	s32 currentLevelID;
 	u32 lastSplitMS;
 };
 
@@ -140,10 +152,10 @@ void NativeSpeedrun_Update(struct NativeSpeedrunState *state, const struct Nativ
 // Copies the externally visible state into the fixed-layout surface block.
 void NativeSpeedrun_WriteSurface(const struct NativeSpeedrunState *state, struct NativeSpeedrunSurface *out);
 
-// Formats state->lastEvent as one text line, including the loadless and RTA
-// values. Returns the number of bytes written excluding the null terminator, or
-// -1 if the buffer is too small.
-int NativeSpeedrun_FormatEvent(const struct NativeSpeedrunState *state, char *buf, u32 size);
+// Formats one event as a text line, including the loadless and RTA values.
+// Returns the number of bytes written excluding the null terminator, or -1 if
+// the buffer is too small.
+int NativeSpeedrun_FormatEvent(const struct NativeSpeedrunState *state, const struct NativeSpeedrunEvent *event, char *buf, u32 size);
 
 // Parses a line-based route config. Lines are "<levelID> <kind> <name>", where
 // kind is "normal" or "boss"; blank lines and lines starting with '#' are

@@ -31,7 +31,7 @@ import time
 SURFACE_MAGIC = 0x43545253
 SURFACE_ABI = 1
 SURFACE_SECTION = ".ctrsr"
-SURFACE_FORMAT = "<IIIIiIIiiIiIII"  # see include/platform/native_speedrun.h
+SURFACE_FORMAT = "<IIIIiIIiiIiIIIi"  # see include/platform/native_speedrun.h
 SURFACE_FIELDS = (
     "magic",
     "abiVersion",
@@ -47,6 +47,7 @@ SURFACE_FIELDS = (
     "lastEventSequence",
     "lastEventSegmentTimeMS",
     "lastEventTotalTimeMS",
+    "lastEventFinishPosition",
 )
 SURFACE_STRUCT = struct.Struct(SURFACE_FORMAT)
 
@@ -56,6 +57,19 @@ EVENT_RUN_START = 1
 EVENT_SPLIT = 2
 EVENT_RUN_END = 3
 EVENT_RESET = 4
+EVENT_LEVEL_ENTER = 5
+EVENT_LEVEL_EXIT = 6
+EVENT_RACE_FINISH = 7
+
+EVENT_KIND = {
+    EVENT_RUN_START: "run_start",
+    EVENT_SPLIT: "split",
+    EVENT_RUN_END: "run_end",
+    EVENT_RESET: "reset",
+    EVENT_LEVEL_ENTER: "level_enter",
+    EVENT_LEVEL_EXIT: "level_exit",
+    EVENT_RACE_FINISH: "race_finish",
+}
 
 
 def format_gametime(milliseconds):
@@ -77,21 +91,23 @@ def parse_event_line(line):
     return fields if "type" in fields else {}
 
 
-def commands_for_event(fields):
-    """Maps one event to the LiveSplit Server commands it should trigger."""
-    event_type = fields.get("type")
-    total = fields.get("loadless_ms", "0")
-
-    if event_type == "run_start":
+def commands_for_kind(kind, total_ms=0):
+    """Maps an event kind to the LiveSplit Server commands it triggers."""
+    if kind == "run_start":
         return ["reset", "setgametime " + format_gametime(0), "starttimer"]
 
-    if event_type in ("split", "run_end"):
-        return ["setgametime " + format_gametime(total), "split"]
+    if kind in ("split", "run_end"):
+        return ["setgametime " + format_gametime(total_ms), "split"]
 
-    if event_type == "reset":
+    if kind == "reset":
         return ["reset"]
 
     return []
+
+
+def commands_for_event(fields):
+    """Maps one parsed event line to the LiveSplit Server commands."""
+    return commands_for_kind(fields.get("type"), fields.get("loadless_ms", "0"))
 
 
 def decode_surface(data):
@@ -427,16 +443,12 @@ def surface_loop(reader, client, poll, duration):
         total = surface["lastEventTotalTimeMS"]
 
         if active and not last_active:
-            client.send("reset")
-            client.send("setgametime " + format_gametime(0))
-            client.send("starttimer")
+            for command in commands_for_kind("run_start"):
+                client.send(command)
 
-        if last_event_sequence is None or event_sequence != last_event_sequence:
-            if event_type in (EVENT_SPLIT, EVENT_RUN_END):
-                client.send("setgametime " + format_gametime(total))
-                client.send("split")
-            elif event_type == EVENT_RESET:
-                client.send("reset")
+        if (last_event_sequence is None or event_sequence != last_event_sequence) and event_type != EVENT_RUN_START:
+            for command in commands_for_kind(EVENT_KIND.get(event_type), total):
+                client.send(command)
 
         if active and surface["loadlessMS"] != last_loadless:
             client.send("setgametime " + format_gametime(surface["loadlessMS"]))

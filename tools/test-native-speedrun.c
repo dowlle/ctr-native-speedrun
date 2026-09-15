@@ -43,6 +43,7 @@ static int g_failures;
 
 static struct NativeSpeedrunState g_state;
 static u64 g_wall;
+static s32 g_finishPosition;
 
 static const struct NativeSpeedrunRoute g_route = {
     .count = 3,
@@ -82,6 +83,8 @@ static void Frame(s32 level, u32 mode, s32 loadStage, u32 elapsed, u32 wallDt, s
 	frame.numPlayers = 1;
 	frame.demoMode = 0;
 	frame.playerFinished = finished;
+	frame.finishPosition = g_finishPosition;
+	g_finishPosition = 0;
 
 	NativeSpeedrun_Update(&g_state, &frame);
 	g_wall += wallDt;
@@ -106,9 +109,12 @@ static void TestStartsOnHubControl(void)
 
 	Frame(HUB, ADVENTURE, IDLE, 32, 32, 0, 0);
 	CHECK_INT(g_state.active, 1);
-	CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_RUN_START);
-	CHECK_INT(g_state.lastEvent.totalTimeMS, 0);
-	CHECK_INT(g_state.lastEvent.segmentTimeMS, 0);
+	CHECK_INT(g_state.eventCount, 2);
+	CHECK_INT(g_state.events[0].type, NATIVE_SPEEDRUN_EVENT_RUN_START);
+	CHECK_INT(g_state.events[0].totalTimeMS, 0);
+	CHECK_INT(g_state.events[0].segmentTimeMS, 0);
+	CHECK_INT(g_state.events[1].type, NATIVE_SPEEDRUN_EVENT_LEVEL_ENTER);
+	CHECK_INT(g_state.events[1].levelID, HUB);
 }
 
 static void TestLoadsExcludedRtaIncluded(void)
@@ -201,7 +207,7 @@ static void TestNonRouteFinishIgnored(void)
 	StartRun();
 
 	Frame(9, ADVENTURE, IDLE, 32, 32, 1, 0); // unrelated race
-	CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_NONE);
+	CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_RACE_FINISH);
 	CHECK_INT(g_state.segmentIndex, 0);
 	CHECK_INT(g_state.active, 1);
 }
@@ -217,8 +223,53 @@ static void TestBossKindMustMatch(void)
 	Frame(4, ADVENTURE, IDLE, 32, 32, 0, 0); // finish edge reset
 
 	Frame(13, ADVENTURE, IDLE, 32, 32, 1, 0); // level matches but not boss mode
-	CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_NONE);
+	CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_RACE_FINISH);
 	CHECK_INT(g_state.segmentIndex, 1);
+}
+
+static void TestLevelEvents(void)
+{
+	BeginTest();
+	StartRun();
+
+	// StartRun leaves the run active in the hub.
+	Frame(3, ADVENTURE, IDLE, 32, 32, 0, 0); // enter Crash Cove
+	CHECK_INT(g_state.eventCount, 2);
+	CHECK_INT(g_state.events[0].type, NATIVE_SPEEDRUN_EVENT_LEVEL_EXIT);
+	CHECK_INT(g_state.events[0].levelID, HUB);
+	CHECK_INT(g_state.events[1].type, NATIVE_SPEEDRUN_EVENT_LEVEL_ENTER);
+	CHECK_INT(g_state.events[1].levelID, 3);
+}
+
+static void TestFinishPosition(void)
+{
+	BeginTest();
+	StartRun();
+
+	g_finishPosition = 2;
+	Frame(3, ADVENTURE, IDLE, 32, 32, 1, 0); // second place
+	CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_SPLIT);
+	CHECK_INT(g_state.lastEvent.finishPosition, 2);
+}
+
+static void TestCounterMonotonic(void)
+{
+	BeginTest();
+	StartRun();
+
+	u32 previous = g_state.sequence;
+	CHECK(previous >= 1); // run start
+
+	Frame(3, ADVENTURE, IDLE, 32, 32, 1, 0);
+	CHECK(g_state.sequence > previous);
+	previous = g_state.sequence;
+
+	struct NativeSpeedrunSurface surface;
+	NativeSpeedrun_WriteSurface(&g_state, &surface);
+	CHECK_INT(surface.sequence, g_state.sequence);
+
+	Frame(4, ADVENTURE, IDLE, 32, 32, 0, 0);
+	CHECK(g_state.sequence >= previous);
 }
 
 static void TestNoCountingAfterRunEnd(void)
@@ -334,7 +385,7 @@ static void TestEventLogLine(void)
 	Frame(3, ADVENTURE, IDLE, 32, 32, 1, 0);
 
 	char line[256] = {0};
-	const int written = NativeSpeedrun_FormatEvent(&g_state, line, sizeof(line));
+	const int written = NativeSpeedrun_FormatEvent(&g_state, &g_state.lastEvent, line, sizeof(line));
 
 	CHECK(written > 0);
 	CHECK(strstr(line, "type=split") != NULL);
@@ -344,7 +395,7 @@ static void TestEventLogLine(void)
 	CHECK(line[written - 1] == '\n');
 
 	char small[8];
-	CHECK_INT(NativeSpeedrun_FormatEvent(&g_state, small, sizeof(small)), -1);
+	CHECK_INT(NativeSpeedrun_FormatEvent(&g_state, &g_state.lastEvent, small, sizeof(small)), -1);
 }
 
 #ifdef NATIVE_SPEEDRUN_REPO_CONFIG
@@ -436,6 +487,9 @@ int main(void)
 	TestFinishEdgeOnlyFiresOnce();
 	TestNonRouteFinishIgnored();
 	TestBossKindMustMatch();
+	TestLevelEvents();
+	TestFinishPosition();
+	TestCounterMonotonic();
 	TestNoCountingAfterRunEnd();
 	TestResetOnMainMenu();
 	TestSegmentTime();

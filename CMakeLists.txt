@@ -40,6 +40,19 @@ else()
     set(CTR_NATIVE_BUILD_ID "${CTR_NATIVE_GIT_HASH}-dirty")
 endif()
 
+if(NOT DEFINED ENV{SOURCE_DATE_EPOCH})
+    execute_process(
+        COMMAND git log -1 --format=%ct
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE CTR_COMMIT_EPOCH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(CTR_COMMIT_EPOCH)
+        set(ENV{SOURCE_DATE_EPOCH} ${CTR_COMMIT_EPOCH})
+    endif()
+endif()
+
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse -Wno-error -g")
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     # Keep absolute source paths out of the binary, for reproducible builds.
