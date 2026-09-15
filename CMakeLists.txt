@@ -57,6 +57,7 @@ function(ctr_native_add_label_warning_if_supported target warning flag_check)
 endfunction()
 
 option(CTR_BUILD_GAME "Build the standalone game executable and its SDL dependency" ON)
+option(CTR_SPEEDRUN "Build the speedrun client feature" OFF)
 
 if(CTR_BUILD_GAME)
 
@@ -93,6 +94,10 @@ target_compile_definitions(ctr_native PRIVATE
     CTR_NATIVE_VERSION=\"${CTR_NATIVE_VERSION}\"
     CTR_NATIVE_BUILD_ID=\"${CTR_NATIVE_BUILD_ID}\"
 )
+
+if(CTR_SPEEDRUN)
+    target_compile_definitions(ctr_native PRIVATE CTR_SPEEDRUN)
+endif()
 target_compile_options(ctr_native PRIVATE -O2)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(ctr_native PRIVATE -Wenum-conversion -Wenum-compare -Wswitch-enum -Wformat -Wparentheses)

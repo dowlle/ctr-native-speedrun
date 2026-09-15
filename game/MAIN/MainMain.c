@@ -6,6 +6,10 @@
 #include <platform/native_savestate.h>
 #endif
 
+#if defined(CTR_SPEEDRUN)
+#include <platform/native_speedrun_runtime.h>
+#endif
+
 #if defined(CTR_NATIVE) && defined(CTR_INTERNAL)
 static struct NativePerfFrameInfo MainPerf_FrameInfo(struct GameTracker *gGT)
 {
@@ -409,6 +413,10 @@ u32 main(void)
 				NativePerf_EndScope(NATIVE_PERF_BUCKET_GAME_LOGIC);
 #endif
 			}
+
+#if defined(CTR_SPEEDRUN)
+			NativeSpeedrunRuntime_Update(gGT);
+#endif
 
 			// If you are in demo mode
 			if (gGT->boolDemoMode != '\0')

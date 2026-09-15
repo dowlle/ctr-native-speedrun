@@ -26,6 +26,10 @@
 #include "platform/native_replay_scheduler.h"
 #include "platform/native_savestate.h"
 
+#if defined(CTR_SPEEDRUN)
+#include "platform/native_speedrun_runtime.h"
+#endif
+
 #ifndef __GNUC__
 #define __attribute__(x)
 #endif
@@ -69,6 +73,11 @@
 #include "platform/native_savestate.c"
 #include "platform/native_state.c"
 #include "platform/native_str.c"
+
+#if defined(CTR_SPEEDRUN)
+#include "platform/native_speedrun.c"
+#include "platform/native_speedrun_runtime.c"
+#endif
 
 #ifndef CC
 #if __GNUC__
@@ -218,6 +227,10 @@ int main(int argc, char *argv[])
 #else
 	(void)argc;
 	(void)argv;
+#endif
+
+#if defined(CTR_SPEEDRUN)
+	NativeSpeedrunRuntime_Init();
 #endif
 
 	const int result = CTR_Main();
