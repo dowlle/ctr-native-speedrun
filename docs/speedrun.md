@@ -94,6 +94,12 @@ python3 tools/speedrun-bridge.py --source events --events speedrun-events.log --
 
 On run start the bridge sends `switchto gametime`, so LiveSplit ranks the client's loadless Game Time rather than real time. LiveSplit 1.8.37 has no command to load splits, so the route is opened once in the GUI (`File`, `Open Splits`).
 
+## Launcher
+
+`speedrun-launch.bat` starts the bridge, then the client, and the bridge exits by itself via `--idle-timeout` once the client stops updating the surface. `speedrun-launch.vbs` does the same with no console window. Point the Steam non-Steam shortcut at one of them instead of the exe if you want the timer started for you.
+
+Note: when Steam launches a launcher rather than the exe, Steam tracks the launcher process, so the overlay and Steam Input may not attach to the game. If controller input matters, keep the shortcut on `ctr_native.exe` and start the bridge separately.
+
 The protocol is the real LiveSplit Server protocol (`src/LiveSplit.Core/Server/CommandServer.cs`); `tools/test-speedrun-bridge.py` drives it against a stub server and runs under ctest, including a full surface-polling run against a fixture process.
 
 ## Not yet done

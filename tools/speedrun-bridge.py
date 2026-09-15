@@ -424,18 +424,35 @@ def follow(events_path, client, poll, exit_at_eof):
         time.sleep(poll)
 
 
-def surface_loop(reader, client, poll, duration):
-    """Polls the surface and keeps LiveSplit in step with the client clock."""
+def surface_loop(reader, client, poll, duration, idle_timeout=None):
+    """Polls the surface and keeps LiveSplit in step with the client clock.
+
+    With idle_timeout set, exits once the surface has not changed for that many
+    seconds, so a launcher can start it and forget it.
+    """
     start = time.time()
+    last_change = time.time()
     last_event_sequence = None
     last_active = False
     last_loadless = None
+    have_sample = False
 
     while duration is None or (time.time() - start) < duration:
         surface = reader.read()
         if surface is None:
+            if idle_timeout is not None and (time.time() - last_change) > idle_timeout:
+                return 0
             time.sleep(poll)
             continue
+
+        if (
+            not have_sample
+            or surface["sequence"] != last_event_sequence
+            or surface["loadlessMS"] != last_loadless
+            or bool(surface["flags"] & FLAG_ACTIVE) != last_active
+        ):
+            last_change = time.time()
+            have_sample = True
 
         active = bool(surface["flags"] & FLAG_ACTIVE)
         event_sequence = surface["lastEventSequence"]
@@ -457,6 +474,9 @@ def surface_loop(reader, client, poll, duration):
         last_active = active
         last_loadless = surface["loadlessMS"]
 
+        if idle_timeout is not None and (time.time() - last_change) > idle_timeout:
+            return 0
+
         time.sleep(poll)
 
     return 0
@@ -473,6 +493,7 @@ def main():
     parser.add_argument("--port", type=int, default=16834)
     parser.add_argument("--poll", type=float, default=0.02)
     parser.add_argument("--duration", type=float, help="stop after this many seconds")
+    parser.add_argument("--idle-timeout", type=float, help="in surface mode, exit after the surface stops changing for this many seconds")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--exit-at-eof", action="store_true", help="process current events then exit")
     args = parser.parse_args()
@@ -492,7 +513,7 @@ def main():
                 return 1
             reader = SurfaceReader(pid)
 
-        return surface_loop(reader, client, args.poll, args.duration)
+        return surface_loop(reader, client, args.poll, args.duration, args.idle_timeout)
     except KeyboardInterrupt:
         return 0
     finally:
