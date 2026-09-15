@@ -140,6 +140,11 @@ void NativeSpeedrun_Update(struct NativeSpeedrunState *state, const struct Nativ
 // Copies the externally visible state into the fixed-layout surface block.
 void NativeSpeedrun_WriteSurface(const struct NativeSpeedrunState *state, struct NativeSpeedrunSurface *out);
 
+// Formats state->lastEvent as one text line, including the loadless and RTA
+// values. Returns the number of bytes written excluding the null terminator, or
+// -1 if the buffer is too small.
+int NativeSpeedrun_FormatEvent(const struct NativeSpeedrunState *state, char *buf, u32 size);
+
 // Parses a line-based route config. Lines are "<levelID> <kind> <name>", where
 // kind is "normal" or "boss"; blank lines and lines starting with '#' are
 // ignored. Returns the split count, or -1 on error with a message in err.

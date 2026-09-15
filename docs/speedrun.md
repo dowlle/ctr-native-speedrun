@@ -31,6 +31,16 @@ A line-based text format, one split per line:
 
 `kind` is `normal` or `boss`. Blank lines and `#` comments are ignored. Names may contain spaces. The Any% NMG route is seeded from the community splits.
 
+## Event log
+
+Each emitted event is one text line, for example:
+
+```
+seq=1 type=split level=3 mode=524288 segment=0 pos=1 seg_ms=128 total_ms=128 loadless_ms=128 rta_ms=128
+```
+
+The line format is stable enough to tail and parse, and it is the record a verifier would inspect.
+
 ## Build and test
 
 The host tests do not need SDL or the game. Configure with the game target off:

@@ -182,6 +182,45 @@ void NativeSpeedrun_WriteSurface(const struct NativeSpeedrunState *state, struct
 	out->lastEventTotalTimeMS = state->lastEvent.totalTimeMS;
 }
 
+internal const char *NativeSpeedrun_EventTypeName(u32 type)
+{
+	switch (type)
+	{
+	case NATIVE_SPEEDRUN_EVENT_RUN_START:
+		return "run_start";
+	case NATIVE_SPEEDRUN_EVENT_SPLIT:
+		return "split";
+	case NATIVE_SPEEDRUN_EVENT_RUN_END:
+		return "run_end";
+	case NATIVE_SPEEDRUN_EVENT_RESET:
+		return "reset";
+	default:
+		return "none";
+	}
+}
+
+int NativeSpeedrun_FormatEvent(const struct NativeSpeedrunState *state, char *buf, u32 size)
+{
+	const struct NativeSpeedrunEvent *event = &state->lastEvent;
+
+	if ((buf == NULL) || (size == 0))
+	{
+		return -1;
+	}
+
+	const int written =
+	    snprintf(buf, size, "seq=%u type=%s level=%d mode=%u segment=%d pos=%d seg_ms=%u total_ms=%u loadless_ms=%u rta_ms=%u\n", event->sequence,
+	             NativeSpeedrun_EventTypeName(event->type), event->levelID, event->gameMode1, event->segmentIndex, event->finishPosition,
+	             event->segmentTimeMS, event->totalTimeMS, state->loadlessMS, state->rtaMS);
+
+	if ((written < 0) || ((u32)written >= size))
+	{
+		return -1;
+	}
+
+	return written;
+}
+
 internal b32 NativeSpeedrun_KindFromToken(const char *token, s32 tokenLength, s32 *kindOut)
 {
 	if ((tokenLength == 6) && (strncmp(token, "normal", 6) == 0))

@@ -322,6 +322,26 @@ static void TestSurface(void)
 	CHECK(surface.lastEventTotalTimeMS == g_state.loadlessMS);
 }
 
+static void TestEventLogLine(void)
+{
+	BeginTest();
+	StartRun();
+	Frame(3, ADVENTURE, IDLE, 32, 32, 1, 0);
+
+	char line[256] = {0};
+	const int written = NativeSpeedrun_FormatEvent(&g_state, line, sizeof(line));
+
+	CHECK(written > 0);
+	CHECK(strstr(line, "type=split") != NULL);
+	CHECK(strstr(line, "level=3") != NULL);
+	CHECK(strstr(line, "segment=0") != NULL);
+	CHECK(strstr(line, "loadless_ms=") != NULL);
+	CHECK(line[written - 1] == '\n');
+
+	char small[8];
+	CHECK_INT(NativeSpeedrun_FormatEvent(&g_state, small, sizeof(small)), -1);
+}
+
 int main(void)
 {
 	TestStartsOnHubControl();
@@ -339,6 +359,7 @@ int main(void)
 	TestParserRejectsBadKind();
 	TestParserRejectsLongName();
 	TestSurface();
+	TestEventLogLine();
 
 	fprintf(stderr, "native_speedrun: %d checks, %d failures\n", g_checks, g_failures);
 	return (g_failures == 0) ? 0 : 1;
