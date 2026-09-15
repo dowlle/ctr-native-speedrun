@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define NATIVE_SPEEDRUN_ROUTE_FILE "speedrun-any-nmg.cfg"
+#define NATIVE_SPEEDRUN_ROUTE_FILE "config/any-nmg.cfg"
 #define NATIVE_SPEEDRUN_LOG_FILE   "speedrun-events.log"
 #define NATIVE_SPEEDRUN_ROUTE_MAX  8192
 

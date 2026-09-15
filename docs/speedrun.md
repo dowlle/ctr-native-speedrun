@@ -29,7 +29,9 @@ A line-based text format, one split per line:
 <levelID> <kind> <name>
 ```
 
-`kind` is `normal` or `boss`. Blank lines and `#` comments are ignored. Names may contain spaces. The Any% NMG route is seeded from the community splits.
+`kind` is `normal` or `boss`. Blank lines and `#` comments are ignored. Names may contain spaces. The shipped Any% NMG route is `config/any-nmg.cfg`.
+
+Boss races reuse a track level id with the `ADVENTURE_BOSS` mode bit, so the same level id can appear twice, once normal and once boss. The mapping comes from `game/232/R232.c` `bossRaceLevelIDs`: the hub order is Gem Stone Valley (Oxide final, Oxide Station), then N. Sanity Beach (Ripper Roo, Roo's Tubes), The Lost Ruins (Papu Papu, Papu's Pyramid), Glacier Park (Komodo Joe, Dragon Mines) and Citadel City (Pinstripe, Hot Air Skyway).
 
 ## Event log
 
@@ -57,7 +59,7 @@ The harness prints a checks and failures line and returns non-zero on failure.
 
 Build the feature into the game with `-DCTR_SPEEDRUN=ON`. The integration lives in `platform/native_speedrun_runtime.c` and is gated everywhere, so the default build is unchanged.
 
-At start it loads `speedrun-any-nmg.cfg` from the working directory if present, otherwise it runs the clocks with no splits. Each gameplay frame it decodes the engine state, refreshes the surface and appends any event to `speedrun-events.log`.
+At start it loads `config/any-nmg.cfg` from the working directory if present, otherwise it runs the clocks with no splits. Each gameplay frame it decodes the engine state, refreshes the surface and appends any event to `speedrun-events.log`.
 
 The surface lives in its own named section:
 
@@ -71,4 +73,4 @@ A consumer locates the section and rejects a mismatched ABI version. The section
 
 - The companion timer bridge.
 - Build identity stamping and the signed release pipeline.
-- The Any% NMG route config content, which needs the boss-race level identities.
+- A runtime Steam session to validate behaviour, as opposed to compile and link.

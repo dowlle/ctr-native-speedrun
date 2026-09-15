@@ -54,11 +54,16 @@ static const struct NativeSpeedrunRoute g_route = {
         },
 };
 
-static void BeginTest(void)
+static void BeginTestRoute(const struct NativeSpeedrunRoute *route)
 {
 	g_wall = 100000;
 	memset(&g_state, 0, sizeof(g_state));
-	NativeSpeedrun_Reset(&g_state, &g_route);
+	NativeSpeedrun_Reset(&g_state, route);
+}
+
+static void BeginTest(void)
+{
+	BeginTestRoute(&g_route);
 }
 
 // One engine frame. wallDt advances the host clock; elapsed is the engine's own
@@ -342,6 +347,85 @@ static void TestEventLogLine(void)
 	CHECK_INT(NativeSpeedrun_FormatEvent(&g_state, small, sizeof(small)), -1);
 }
 
+#ifdef NATIVE_SPEEDRUN_REPO_CONFIG
+static int LoadRepoRoute(struct NativeSpeedrunRoute *route)
+{
+	FILE *file = fopen(NATIVE_SPEEDRUN_REPO_CONFIG, "rb");
+	if (file == NULL)
+	{
+		return 0;
+	}
+
+	char text[8192];
+	const size_t count = fread(text, 1, sizeof(text) - 1, file);
+	fclose(file);
+	text[count] = '\0';
+
+	char err[128] = {0};
+	return NativeSpeedrun_ParseRoute(text, route, err, sizeof(err));
+}
+
+static void TestRepoRouteConfig(void)
+{
+	struct NativeSpeedrunRoute route;
+
+	CHECK_INT(LoadRepoRoute(&route), 21);
+	if (route.count != 21)
+	{
+		return;
+	}
+
+	CHECK_INT(route.splits[0].levelID, 3);
+	CHECK_INT(route.splits[0].kind, NATIVE_SPEEDRUN_SPLIT_NORMAL);
+	CHECK(strcmp(route.splits[0].name, "Crash Cove") == 0);
+
+	CHECK_INT(route.splits[4].levelID, 6);
+	CHECK_INT(route.splits[4].kind, NATIVE_SPEEDRUN_SPLIT_BOSS);
+	CHECK(strcmp(route.splits[4].name, "Ripper Roo") == 0);
+
+	CHECK_INT(route.splits[20].levelID, 13);
+	CHECK_INT(route.splits[20].kind, NATIVE_SPEEDRUN_SPLIT_BOSS);
+	CHECK(strcmp(route.splits[20].name, "N. Oxide") == 0);
+}
+
+static void TestFullRoute(void)
+{
+	struct NativeSpeedrunRoute route;
+
+	if (LoadRepoRoute(&route) != 21)
+	{
+		CHECK(false);
+		return;
+	}
+
+	BeginTestRoute(&route);
+	StartRun();
+
+	for (s32 i = 0; i < route.count; i++)
+	{
+		const u32 mode = (route.splits[i].kind == NATIVE_SPEEDRUN_SPLIT_BOSS) ? (ADVENTURE | BOSS) : ADVENTURE;
+
+		Frame(route.splits[i].levelID, mode, IDLE, 32, 32, 0, 0);
+		Frame(route.splits[i].levelID, mode, IDLE, 32, 32, 1, 0);
+
+		if (i < (route.count - 1))
+		{
+			CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_SPLIT);
+			CHECK_INT(g_state.lastEvent.segmentIndex, i);
+		}
+		else
+		{
+			CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_RUN_END);
+			CHECK_INT(g_state.lastEvent.segmentIndex, i);
+		}
+	}
+
+	CHECK_INT(g_state.active, 0);
+	CHECK_INT(g_state.finished, 1);
+	CHECK_INT(g_state.segmentIndex, route.count);
+}
+#endif
+
 int main(void)
 {
 	TestStartsOnHubControl();
@@ -360,6 +444,10 @@ int main(void)
 	TestParserRejectsLongName();
 	TestSurface();
 	TestEventLogLine();
+#ifdef NATIVE_SPEEDRUN_REPO_CONFIG
+	TestRepoRouteConfig();
+	TestFullRoute();
+#endif
 
 	fprintf(stderr, "native_speedrun: %d checks, %d failures\n", g_checks, g_failures);
 	return (g_failures == 0) ? 0 : 1;
