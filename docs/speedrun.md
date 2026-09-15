@@ -53,8 +53,22 @@ cmake --build build-host --target test_native_speedrun
 
 The harness prints a checks and failures line and returns non-zero on failure.
 
+## Integration
+
+Build the feature into the game with `-DCTR_SPEEDRUN=ON`. The integration lives in `platform/native_speedrun_runtime.c` and is gated everywhere, so the default build is unchanged.
+
+At start it loads `speedrun-any-nmg.cfg` from the working directory if present, otherwise it runs the clocks with no splits. Each gameplay frame it decodes the engine state, refreshes the surface and appends any event to `speedrun-events.log`.
+
+The surface lives in its own named section:
+
+- Section name `.ctrsr`
+- First word is the magic `0x43545253`
+- Second word is the ABI version, currently `1`
+
+A consumer locates the section and rejects a mismatched ABI version. The section is compile-verified on the host and on the Linux game build; runtime behaviour still needs a Steam session.
+
 ## Not yet done
 
-- Integration: feed real engine frames and place the surface in its named section.
-- Retaining the emitted event log and the companion timer bridge.
+- The companion timer bridge.
 - Build identity stamping and the signed release pipeline.
+- The Any% NMG route config content, which needs the boss-race level identities.
