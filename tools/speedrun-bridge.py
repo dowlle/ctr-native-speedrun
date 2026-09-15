@@ -94,7 +94,7 @@ def parse_event_line(line):
 def commands_for_kind(kind, total_ms=0):
     """Maps an event kind to the LiveSplit Server commands it triggers."""
     if kind == "run_start":
-        return ["reset", "setgametime " + format_gametime(0), "starttimer"]
+        return ["reset", "switchto gametime", "setgametime " + format_gametime(0), "starttimer"]
 
     if kind in ("split", "run_end"):
         return ["setgametime " + format_gametime(total_ms), "split"]

@@ -92,6 +92,8 @@ python3 tools/speedrun-bridge.py --source events --events speedrun-events.log --
 
 `--dry-run` prints the commands without connecting, `--duration` stops after a number of seconds, and `--exit-at-eof` processes the current events then exits.
 
+On run start the bridge sends `switchto gametime`, so LiveSplit ranks the client's loadless Game Time rather than real time. LiveSplit 1.8.37 has no command to load splits, so the route is opened once in the GUI (`File`, `Open Splits`).
+
 The protocol is the real LiveSplit Server protocol (`src/LiveSplit.Core/Server/CommandServer.cs`); `tools/test-speedrun-bridge.py` drives it against a stub server and runs under ctest, including a full surface-polling run against a fixture process.
 
 ## Not yet done

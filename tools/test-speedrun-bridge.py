@@ -49,7 +49,7 @@ def test_parse_event_line():
 
 def test_commands_for_event():
     start = bridge.commands_for_event({"type": "run_start", "loadless_ms": "0"})
-    check(start == ["reset", "setgametime 0:00:00.000", "starttimer"], "run start commands")
+    check(start == ["reset", "switchto gametime", "setgametime 0:00:00.000", "starttimer"], "run start commands")
 
     split = bridge.commands_for_event({"type": "split", "loadless_ms": "128"})
     check(split == ["setgametime 0:00:00.128", "split"], "split commands")
@@ -106,6 +106,7 @@ def test_end_to_end():
 
     expected = [
         "reset",
+        "switchto gametime",
         "setgametime 0:00:00.000",
         "starttimer",
         "setgametime 0:00:00.128",
