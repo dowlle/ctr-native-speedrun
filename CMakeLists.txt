@@ -133,6 +133,10 @@ if(CTR_SPEEDRUN_TESTS)
 
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
-        add_test(NAME speedrun_bridge COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/test-speedrun-bridge.py)
+        add_executable(test_surface_fixture tools/test-surface-fixture.c)
+        target_include_directories(test_surface_fixture PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        target_compile_options(test_surface_fixture PRIVATE -O0 -g)
+
+        add_test(NAME speedrun_bridge COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/test-speedrun-bridge.py --fixture $<TARGET_FILE:test_surface_fixture>)
     endif()
 endif()

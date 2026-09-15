@@ -8,6 +8,7 @@ speaking the real newline protocol.
 import importlib.util
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -115,11 +116,58 @@ def test_end_to_end():
     check(server.received == expected, f"end to end commands were {server.received}")
 
 
+def test_surface_integration(fixture_path):
+    if not fixture_path or not os.path.exists(fixture_path):
+        print("SKIP: surface integration (no fixture)")
+        return
+
+    surface_file = tempfile.NamedTemporaryFile(suffix=".bin", delete=False)
+    surface_file.close()
+
+    server = StubServer()
+    fixture = subprocess.Popen([fixture_path, surface_file.name], stdout=subprocess.DEVNULL)
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                BRIDGE_PATH,
+                "--source",
+                "surface",
+                "--surface-file",
+                surface_file.name,
+                "--port",
+                str(server.port),
+                "--duration",
+                "2.0",
+                "--poll",
+                "0.02",
+            ],
+            timeout=20,
+            check=False,
+        )
+    finally:
+        fixture.wait(timeout=10)
+        os.unlink(surface_file.name)
+
+    server.join()
+    received = server.received
+
+    check("reset" in received, "surface: reset sent on run start")
+    check("starttimer" in received, "surface: starttimer sent on run start")
+    check(sum(1 for command in received if command.startswith("setgametime")) >= 2, "surface: game time polled")
+    check(received.count("split") == 2, f"surface: two splits, got {received.count('split')}")
+
+
 def main():
+    fixture_path = None
+    if len(sys.argv) > 2 and sys.argv[1] == "--fixture":
+        fixture_path = sys.argv[2]
+
     test_format_gametime()
     test_parse_event_line()
     test_commands_for_event()
     test_end_to_end()
+    test_surface_integration(fixture_path)
     print(f"speedrun_bridge: {checks} checks, {failures} failures")
     return 1 if failures else 0
 

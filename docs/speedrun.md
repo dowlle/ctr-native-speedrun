@@ -71,7 +71,12 @@ A consumer locates the section and rejects a mismatched ABI version. The section
 
 ## Timer bridge
 
-`tools/speedrun-bridge.py` tails the run log and drives LiveSplit Server over TCP, mapping events to commands: `run_start` to reset, set game time to zero and start; `split` and `run_end` to set the game time and split; `reset` to reset.
+`tools/speedrun-bridge.py` drives LiveSplit Server over TCP from one of two sources:
+
+- `events` tails `speedrun-events.log`. Correct at splits, approximate for the live clock between them.
+- `surface` polls the client's surface, so LiveSplit's game time tracks the loadless clock continuously and live deltas match. Read from a file with `--surface-file`, or from process memory with `--process` or `--pid` (Windows `ReadProcessMemory`).
+
+The client writes `speedrun-surface.bin` every frame in addition to the `.ctrsr` section. The file is the cross-platform path and is required on Linux, where `yama` `ptrace_scope=1` blocks reading another process's memory.
 
 LiveSplit setup, one time:
 
@@ -81,15 +86,15 @@ LiveSplit setup, one time:
 Run the bridge:
 
 ```
-python3 tools/speedrun-bridge.py --events speedrun-events.log --port 16834
+python3 tools/speedrun-bridge.py --source surface --surface-file speedrun-surface.bin --port 16834
+python3 tools/speedrun-bridge.py --source events --events speedrun-events.log --port 16834
 ```
 
-`--dry-run` prints the commands without connecting, and `--exit-at-eof` processes the current events then exits.
+`--dry-run` prints the commands without connecting, `--duration` stops after a number of seconds, and `--exit-at-eof` processes the current events then exits.
 
-The protocol is the real LiveSplit Server protocol (`src/LiveSplit.Core/Server/CommandServer.cs`); `tools/test-speedrun-bridge.py` drives it against a stub server and runs under ctest.
+The protocol is the real LiveSplit Server protocol (`src/LiveSplit.Core/Server/CommandServer.cs`); `tools/test-speedrun-bridge.py` drives it against a stub server and runs under ctest, including a full surface-polling run against a fixture process.
 
 ## Not yet done
 
-- A surface-polling mode for continuous game time, rather than event-time updates.
-- Build identity stamping is done; the verifier-side allowlist service is not.
+- The verifier-side allowlist service.
 - A runtime Steam session to validate behaviour, as opposed to compile and link.
