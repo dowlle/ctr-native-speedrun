@@ -367,6 +367,7 @@ class LiveSplitClient:
         self.port = port
         self.dry_run = dry_run
         self.sock = None
+        self.warned = False
 
     def _connect(self):
         self.sock = socket.create_connection((self.host, self.port), timeout=5)
@@ -375,17 +376,23 @@ class LiveSplitClient:
         if self.dry_run:
             print(command)
             return
+
         for attempt in (1, 2):
             try:
                 if self.sock is None:
                     self._connect()
                 self.sock.sendall((command + "\n").encode("ascii"))
+                self.warned = False
                 return
             except OSError:
                 self.close()
                 if attempt == 2:
-                    print(f"bridge: could not reach LiveSplit at {self.host}:{self.port}", file=sys.stderr)
-                    raise
+                    # LiveSplit may not be running yet; keep going and retry
+                    # on the next command rather than exiting the bridge.
+                    if not self.warned:
+                        print(f"bridge: LiveSplit not reachable at {self.host}:{self.port}; will keep trying", file=sys.stderr)
+                        self.warned = True
+                    return
                 time.sleep(0.5)
 
     def close(self):
