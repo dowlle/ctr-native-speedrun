@@ -55,6 +55,16 @@ static const struct NativeSpeedrunRoute g_route = {
         },
 };
 
+static const struct NativeSpeedrunRoute g_twoTrackRoute = {
+    .count = 3,
+    .splits =
+        {
+            {3, NATIVE_SPEEDRUN_SPLIT_NORMAL, "Crash Cove"},
+            {6, NATIVE_SPEEDRUN_SPLIT_NORMAL, "Roo's Tubes"},
+            {9, NATIVE_SPEEDRUN_SPLIT_NORMAL, "Mystery Caves"},
+        },
+};
+
 static void BeginTestRoute(const struct NativeSpeedrunRoute *route)
 {
 	g_wall = 100000;
@@ -251,6 +261,58 @@ static void TestFinishPosition(void)
 	Frame(3, ADVENTURE, IDLE, 32, 32, 1, 0); // second place
 	CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_SPLIT);
 	CHECK_INT(g_state.lastEvent.finishPosition, 2);
+}
+
+// Regression: on the load into the second track the P1 driver data is stale, so
+// the finished flag reads set with a garbage rank while levelID already names
+// the next track. That must not split; the real finish must.
+static void TestStaleFinishDuringLoadIgnored(void)
+{
+	const u32 loading = ADVENTURE | NATIVE_SPEEDRUN_GM_LOADING;
+
+	BeginTestRoute(&g_twoTrackRoute);
+	StartRun();
+
+	Frame(3, ADVENTURE, IDLE, 32, 32, 0, 0);
+	g_finishPosition = 1;
+	Frame(3, ADVENTURE, IDLE, 32, 32, 1, 0); // Crash Cove finish
+	CHECK_INT(g_state.segmentIndex, 1);
+	Frame(HUB, ADVENTURE, IDLE, 32, 32, 0, 0); // back in the hub
+
+	// Load into Roo's Tubes: load stage busy, stale flag and rank.
+	for (s32 i = 0; i < 4; i++)
+	{
+		g_finishPosition = 15232;
+		Frame(6, loading, 0, 0, 500, 1, 0);
+		CHECK_INT(g_state.segmentIndex, 1);
+		CHECK(g_state.lastEvent.type != NATIVE_SPEEDRUN_EVENT_SPLIT);
+		CHECK(g_state.lastEvent.type != NATIVE_SPEEDRUN_EVENT_RACE_FINISH);
+	}
+
+	// Load stage idle again but the loading mode bit still set.
+	g_finishPosition = 15232;
+	Frame(6, loading, IDLE, 32, 32, 1, 0);
+	CHECK_INT(g_state.segmentIndex, 1);
+
+	// Countdown, stale flag still readable.
+	g_finishPosition = 1;
+	Frame(6, ADVENTURE | NATIVE_SPEEDRUN_GM_START_OF_RACE, IDLE, 32, 32, 1, 0);
+	CHECK_INT(g_state.segmentIndex, 1);
+
+	// Garbage rank on an otherwise normal frame.
+	g_finishPosition = 15232;
+	Frame(6, ADVENTURE, IDLE, 32, 32, 1, 0);
+	CHECK_INT(g_state.segmentIndex, 1);
+
+	Frame(6, ADVENTURE, IDLE, 32, 32, 0, 0); // racing
+
+	g_finishPosition = 1;
+	Frame(6, ADVENTURE | NATIVE_SPEEDRUN_GM_END_OF_RACE, IDLE, 32, 32, 1, 0); // real finish
+	CHECK_INT(g_state.lastEvent.type, NATIVE_SPEEDRUN_EVENT_SPLIT);
+	CHECK_INT(g_state.lastEvent.segmentIndex, 1);
+	CHECK_INT(g_state.lastEvent.levelID, 6);
+	CHECK_INT(g_state.lastEvent.finishPosition, 1);
+	CHECK_INT(g_state.segmentIndex, 2);
 }
 
 static void TestCounterMonotonic(void)
@@ -490,6 +552,7 @@ int main(void)
 	TestBossKindMustMatch();
 	TestLevelEvents();
 	TestFinishPosition();
+	TestStaleFinishDuringLoadIgnored();
 	TestCounterMonotonic();
 	TestNoCountingAfterRunEnd();
 	TestResetOnMainMenu();

@@ -37,7 +37,7 @@ internal void NativeSpeedrun_Emit(struct NativeSpeedrunState *state, u32 type, c
 	state->sequence++;
 
 	s32 finishPosition = 0;
-	if (frame->playerFinished != 0)
+	if ((frame->playerFinished != 0) && (frame->finishPosition <= NATIVE_SPEEDRUN_MAX_FINISH_POSITION))
 	{
 		finishPosition = (frame->finishPosition > 0) ? frame->finishPosition : 1;
 	}
@@ -95,6 +95,15 @@ void NativeSpeedrun_Update(struct NativeSpeedrunState *state, const struct Nativ
 	const b32 gameplay = (frame->mainGameState == NATIVE_SPEEDRUN_MAIN_GAME_GAMEPLAY);
 	const b32 loadFrame = (frame->loadStage != NATIVE_SPEEDRUN_LOAD_IDLE);
 	const b32 paused = (frame->gameMode1 & NATIVE_SPEEDRUN_GM_PAUSE_ALL) != 0;
+
+	// The finished flag is only trusted on a settled gameplay frame. While a
+	// level loads, levelID already names the next track but the P1 driver data
+	// is stale, so the flag and rank can read as garbage and would otherwise
+	// split the next route entry before the race has started.
+	const b32 finishFrame = gameplay && !loadFrame && ((frame->gameMode1 & NATIVE_SPEEDRUN_GM_LOADING) == 0) &&
+	                        ((frame->gameMode1 & NATIVE_SPEEDRUN_GM_START_OF_RACE) == 0);
+	const b32 playerFinished =
+	    finishFrame && (frame->playerFinished != 0) && (frame->finishPosition <= NATIVE_SPEEDRUN_MAX_FINISH_POSITION);
 	const u32 wallDelta = state->havePrevWall ? NativeSpeedrun_WallDelta(frame->wallTimeMS, state->prevWallMS) : 0u;
 
 	state->paused = paused ? 1u : 0u;
@@ -157,7 +166,7 @@ void NativeSpeedrun_Update(struct NativeSpeedrunState *state, const struct Nativ
 
 		// Race completion: always a race finish, and a split when it advances
 		// the route.
-		if ((frame->playerFinished != 0) && (state->prevPlayerFinished == 0))
+		if (playerFinished && (state->prevPlayerFinished == 0))
 		{
 			const s32 index = state->segmentIndex;
 
@@ -197,7 +206,7 @@ void NativeSpeedrun_Update(struct NativeSpeedrunState *state, const struct Nativ
 		}
 	}
 
-	state->prevPlayerFinished = (frame->playerFinished != 0) ? 1 : 0;
+	state->prevPlayerFinished = playerFinished ? 1 : 0;
 	state->prevWallMS = frame->wallTimeMS;
 	state->havePrevWall = 1;
 }

@@ -20,6 +20,10 @@
 
 // include/namespace_Main.h
 #define NATIVE_SPEEDRUN_LOAD_IDLE (-1)
+
+// Highest valid race finish position (eight drivers). Larger values are stale
+// driver data and are ignored.
+#define NATIVE_SPEEDRUN_MAX_FINISH_POSITION 8
 #define NATIVE_SPEEDRUN_MAIN_GAME_GAMEPLAY 3
 
 // include/namespace_Level.h, the starting adventure hub.
