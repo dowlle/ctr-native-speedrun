@@ -1,13 +1,13 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80031b50-0x80031bdc.
 void LOAD_GlobalModelPtrs_MPK()
 {
-	struct GameTracker *gGT = sdata->gGT;
+	struct GameTracker *gGT = GAME_TRACKER;
+	int i;
 
-	for (int i = 0; i < LOAD_DRIVER_MODEL_EXTRA_COUNT; i++)
+	for (i = 0; i < LOAD_DRIVER_MODEL_EXTRA_COUNT; i++)
 	{
-		struct Model *m = data.driverModelExtras[i].model;
+		struct Model *m = GAME_DRIVER_MODEL_EXTRAS[i].model;
 
 		if (m == NULL)
 		{
@@ -22,18 +22,20 @@ void LOAD_GlobalModelPtrs_MPK()
 		gGT->modelPtr[m->id] = m;
 	}
 
-	if (sdata->PLYROBJECTLIST != 0)
+	if (GAME_PLAYER_OBJECT_LIST != 0)
 	{
-		LibraryOfModels_Store(gGT, -1, (struct Model **)sdata->PLYROBJECTLIST);
+		// NOTE(aalhendi): Retail reloads the tracker for this call after the model loop.
+		LibraryOfModels_Store(GAME_TRACKER_RELOAD(), -1, GAME_PLAYER_OBJECT_LIST);
 	}
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80031bdc-0x80031c1c.
-void LOAD_HubSwapPtrs(struct GameTracker *gGT)
+void LOAD_HubSwapPtrs(struct GameTracker *gGT, int unused)
 {
 	struct Level *oldLev1;
 	struct VisMem *oldVisMem1;
 	struct VisMem *oldVisMem2;
+	// NOTE(aalhendi): Retail passes a second argument that this callee does not use.
+	(void)unused;
 
 	// if no secondary lev exists, quit
 	if (gGT->level2 == 0)

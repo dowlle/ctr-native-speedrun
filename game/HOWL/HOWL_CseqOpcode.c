@@ -1,24 +1,26 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80029e18-0x80029f1c
+// NOTE(aalhendi): The resident unit binds the initial music-volume byte as a small-data scalar.
+#ifndef HOWL_CSEQ_MUSIC_VOLUME_INITIAL
+#define HOWL_CSEQ_MUSIC_VOLUME_INITIAL (sdata->vol_Music)
+#endif
+
 void cseq_opcode01_noteoff(struct SongSeq *seq)
 {
 	struct ChannelStats *curr, *backupNext;
 	u8 *currNote = seq->currNote;
-	int soundID = seq->soundID;
-	u32 *flagPtr;
 
-	for (curr = (struct ChannelStats *)sdata->channelTaken.first; curr != NULL; curr = backupNext)
+	for (curr = (struct ChannelStats *)GAME_CHANNEL_TAKEN.first; curr != NULL; curr = backupNext)
 	{
-		backupNext = curr->next;
+		backupNext = curr->link.links.next;
 
 		if (curr->type != HOWL_CHANNEL_TYPE_MUSIC)
 		{
 			continue;
 		}
 
-		// not the sound needed to turn off
-		if (curr->soundID != soundID)
+		// only update this sequence's channels
+		if (curr->soundID != seq->soundID)
 		{
 			continue;
 		}
@@ -30,19 +32,18 @@ void cseq_opcode01_noteoff(struct SongSeq *seq)
 		}
 
 		// enable OFF flag, disable ON flag
-		flagPtr = &sdata->ChannelUpdateFlags[curr->channelID];
-		*flagPtr |= HOWL_CHANNEL_UPDATE_OFF;
-		*flagPtr &= ~HOWL_CHANNEL_UPDATE_KEY_ON;
+		GAME_CHANNEL_UPDATE_FLAGS[curr->channelID] |= HOWL_CHANNEL_UPDATE_OFF;
+		// NOTE(aalhendi): Retail rereads the word for the second flag update.
+		*(volatile u32 *)&GAME_CHANNEL_UPDATE_FLAGS[curr->channelID] &= ~HOWL_CHANNEL_UPDATE_KEY_ON;
 
 		curr->flags &= (u8)~1;
 
 		// recycle: remove from taken, put on free
-		LIST_RemoveMember(&sdata->channelTaken, (struct Item *)curr);
-		LIST_AddBack(&sdata->channelFree, (struct Item *)curr);
+		LIST_RemoveMember(&GAME_CHANNEL_TAKEN, (struct Item *)curr);
+		LIST_AddBack(&GAME_CHANNEL_FREE, (struct Item *)curr);
 	}
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80029f1c-0x80029f24
 void cseq_opcode02_empty(struct SongSeq *seq)
 {
 	(void)seq;
@@ -50,134 +51,168 @@ void cseq_opcode02_empty(struct SongSeq *seq)
 }
 
 // "end of song" opcode
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80029f24-0x80029f78
 void cseq_opcode03(struct SongSeq *seq)
 {
-	// if song does not loop
-	if ((seq->flags & 2) == 0)
+	// if song loops
+	if ((seq->flags & 2) != 0)
 	{
-		SongPool_StopAllCseq(&sdata->songPool[seq->songPoolIndex]);
+		seq->flags |= 8;
 	}
 
-	// if song loops
+	// if song does not loop
 	else
 	{
-		// start over
-		seq->flags |= 8;
+		SongPool_StopAllCseq(&GAME_SONG_POOL[seq->songPoolIndex]);
 	}
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80029f78-0x80029f80
 void cseq_opcode04_empty(struct SongSeq *seq)
 {
 	(void)seq;
 	// left empty by ND
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80029f80-0x8002a170
 void howl_InitChannelAttr_Music(struct SongSeq *seq, struct ChannelAttr *attr, int index, int channelVol)
 {
-	int pitch;
-	s32 sampleVol;
-	int songIndex = seq->songPoolIndex;
+	// NOTE(aalhendi): Keep volume and intermediate products in their retail registers.
+	register s32 volume CTR_PSX_REGISTER("$20") = channelVol;
+	u32 pitch;
+	struct Song *song = &GAME_SONG_POOL[seq->songPoolIndex];
+	u32 finalVolume;
+	register u32 gain CTR_PSX_REGISTER("$8");
 
-	sampleVol = CTR_MipsSra(CTR_MipsMulLo(CTR_MipsMulLo(sdata->vol_Music, sdata->songPool[songIndex].vol_Curr), seq->vol_Curr), 10);
+	if ((seq->flags & 4) != 0)
+	{
+		struct SampleDrums *shortSample = &sdata->ptrCseqShortSamples[index];
+		register s32 mix CTR_PSX_REGISTER("$5");
+		s32 sampleVol;
+		u32 ad;
+		register u32 level CTR_PSX_REGISTER("$2");
+		register u32 master CTR_PSX_REGISTER("$3");
 
-	// instrument
-	if ((seq->flags & 4) == 0)
+		if (seq->distort != HOWL_SFX_DISTORTION_NONE)
+		{
+			u32 rawPitch = (u16)shortSample->pitch;
+			u32 coefficient = GAME_DISTORT_CONST_OTHER_FX[seq->distort];
+			// NOTE(aalhendi): Keep the coefficient separate from the multiplication result.
+			CTR_PSX_BIND_VALUE_CLOBBER(coefficient, "$8");
+			gain = rawPitch * coefficient;
+			pitch = gain >> 16;
+		}
+		else
+		{
+			pitch = (u16)shortSample->pitch;
+		}
+
+		attr->spuStartAddr = (void *)(sdata->howl_spuAddrs[(u16)shortSample->spuIndex].spuAddr << 3);
+		ad = 0x80ff;
+		attr->ad = ad;
+		attr->sr = 0x1fc2;
+		master = sdata->vol_Music;
+		level = song->vol_Curr;
+		gain = master * level;
+		level = seq->vol_Curr;
+		gain = gain * level;
+		// NOTE(aalhendi): Sample its volume after the sequence gain product.
+		CTR_PSX_DEPEND_VALUE(shortSample, gain);
+		sampleVol = shortSample->volume;
+		mix = CTR_MipsSra(gain, 10);
+
+		gain = (u32)mix * (u32)sampleVol;
+		gain = gain * (u32)volume;
+	}
+	else
 	{
 		struct SampleInstrument *longSample = &sdata->ptrCseqLongSamples[seq->instrumentID];
 
-		pitch = howl_InstrumentPitch(longSample->basePitch, index, seq->distort);
+		u32 result;
+		u32 sampleAddr;
+		register u32 master CTR_PSX_REGISTER("$4");
+		register s32 mix CTR_PSX_REGISTER("$5");
+		s32 sampleVol;
+		register u32 level CTR_PSX_REGISTER("$3");
 
-		attr->spuStartAddr = (void *)(sdata->howl_spuAddrs[longSample->spuIndex].spuAddr << 3);
-
-		// audio ADSR
+		// NOTE(aalhendi): The pitch call precedes volume sampling.
+		result = howl_InstrumentPitch(longSample->basePitch, index, seq->distort);
+		sampleAddr = sdata->howl_spuAddrs[(u16)longSample->spuIndex].spuAddr;
+		master = sdata->vol_Music;
+		attr->spuStartAddr = (void *)(sampleAddr << 3);
 		attr->ad = longSample->ad;
 		attr->sr = longSample->sr;
+		level = song->vol_Curr;
+		gain = master * level;
+		level = seq->vol_Curr;
+		gain = gain * level;
+		// NOTE(aalhendi): Sample its volume after the sequence gain product.
+		CTR_PSX_DEPEND_VALUE(longSample, gain);
+		sampleVol = longSample->volume;
+		mix = CTR_MipsSra(gain, 10);
 
-		sampleVol = CTR_MipsMulLo(sampleVol, longSample->volume);
+		gain = (u32)mix * (u32)sampleVol;
+		gain = gain * (u32)volume;
+		// NOTE(aalhendi): Retain volume through its final multiply before truncating pitch.
+		CTR_PSX_KEEP_VALUE_RELAXED(volume);
+		CTR_PSX_DEPEND_VALUE(result, volume);
+		pitch = (u16)result;
 	}
 
-	// drums
-	else
-	{
-		struct SampleDrums *shortSample = &sdata->ptrCseqShortSamples[index];
-
-		if (seq->distort == HOWL_SFX_DISTORTION_NONE)
-		{
-			pitch = shortSample->pitch;
-		}
-
-		else
-		{
-			pitch = CTR_MipsSrl(CTR_MipsMulLo((u16)shortSample->pitch, data.distortConst_OtherFX[seq->distort]), 16);
-		}
-
-		attr->spuStartAddr = (void *)(sdata->howl_spuAddrs[shortSample->spuIndex].spuAddr << 3);
-
-		// audio ADSR
-		attr->ad = 0x80ff;
-		attr->sr = 0x1fc2;
-
-		sampleVol = CTR_MipsMulLo(sampleVol, shortSample->volume);
-	}
-
-	Channel_SetVolume(attr, CTR_MipsSrl(CTR_MipsMulLo(sampleVol, channelVol), 15), seq->LR);
-
+	finalVolume = gain >> 15;
+	// NOTE(aalhendi): Form the shifted gain before sampling LR.
+	CTR_PSX_OBSERVE_VALUE(finalVolume);
+	Channel_SetVolume(attr, finalVolume, seq->LR);
 	attr->pitch = pitch;
 	attr->reverb = seq->reverb;
 }
 
 // change volume
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a170-0x8002a28c
 void cseq_opcode_from06and07(struct SongSeq *seq)
 {
-	struct ChannelStats *curr, *backupNext;
-	int soundID = seq->soundID;
-	int songIndex = seq->songPoolIndex;
+	struct ChannelStats *curr;
 
-	int sampleVol = CTR_MipsMulLo(CTR_MipsMulLo(sdata->vol_Music, sdata->songPool[songIndex].vol_Curr), seq->vol_Curr);
-
-	for (curr = (struct ChannelStats *)sdata->channelTaken.first; curr != NULL; curr = backupNext)
+	for (curr = (struct ChannelStats *)GAME_CHANNEL_TAKEN.first; curr != NULL; curr = (struct ChannelStats *)curr->link.links.next)
 	{
-		backupNext = curr->next;
+		int sampleVol;
 
 		if (curr->type != HOWL_CHANNEL_TYPE_MUSIC)
 		{
 			continue;
 		}
 
-		// not the sound needed to turn off
-		if (curr->soundID != soundID)
+		// only update this sequence's channels
+		if (curr->soundID != seq->soundID)
 		{
 			continue;
 		}
 
-		Channel_SetVolume(&sdata->channelAttrNew[curr->channelID], CTR_MipsSra(CTR_MipsMulLo(sampleVol, curr->vol), 18), seq->LR);
+		// NOTE(aalhendi): Retail samples the current song volume for each matching channel.
+		sampleVol = CTR_MipsMulLo(CTR_MipsMulLo(sdata->vol_Music, GAME_SONG_POOL[seq->songPoolIndex].vol_Curr), seq->vol_Curr);
+		Channel_SetVolume(&GAME_CHANNEL_ATTR_NEW[curr->channelID], CTR_MipsSra(CTR_MipsMulLo(sampleVol, curr->vol), 18), seq->LR);
 
 		// update volume
-		sdata->ChannelUpdateFlags[curr->channelID] |= HOWL_CHANNEL_UPDATE_VOLUME;
+		GAME_CHANNEL_UPDATE_FLAGS[curr->channelID] |= HOWL_CHANNEL_UPDATE_VOLUME;
 	}
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a28c-0x8002a3a8
 void cseq_opcode05_noteon(struct SongSeq *seq)
 {
 	u8 *currNote;
-	int songIndex = seq->songPoolIndex;
+	s32 songIndex;
+	s32 songOffset;
 	struct ChannelStats *stats;
 	struct ChannelAttr attr;
 
-	if (sdata->vol_Music == 0)
-	{
-		return;
-	}
-	if (sdata->songPool[songIndex].vol_Curr == 0)
+	if (HOWL_CSEQ_MUSIC_VOLUME_INITIAL == 0)
 	{
 		return;
 	}
 	if (seq->vol_Curr == 0)
+	{
+		return;
+	}
+	songIndex = seq->songPoolIndex;
+	// NOTE(aalhendi): Keep the song stride separate from its base for retail address scheduling.
+	songOffset = songIndex * sizeof(struct Song);
+	if (((struct Song *)((u8 *)GAME_SONG_POOL + songOffset))->vol_Curr == 0)
 	{
 		return;
 	}
@@ -195,11 +230,9 @@ void cseq_opcode05_noteon(struct SongSeq *seq)
 
 	stats->flags |= 0xe;
 
+	stats->unk1 = seq->unk;
 	stats->type = HOWL_CHANNEL_TYPE_MUSIC;
 	stats->unk2 = 0;
-
-	// dang, what?
-	stats->unk1 = seq->unk;
 
 	// echo and reverb is same thing, needs rename
 	stats->echo = seq->reverb;
@@ -208,14 +241,13 @@ void cseq_opcode05_noteon(struct SongSeq *seq)
 
 	stats->distort = seq->distort;
 	stats->LR = seq->LR;
-	stats->timeLeft = 0;
 	stats->drumIndex_pitchIndex = currNote[1];
+	stats->timeLeft = 0;
 	stats->soundID = seq->soundID;
 
 	seq->unk0A = (u8)CTR_MipsAddLo(seq->unk0A, 1);
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a3a8-0x8002a3d4
 void cseq_opcode06(struct SongSeq *seq)
 {
 	u8 *note = seq->currNote;
@@ -223,7 +255,6 @@ void cseq_opcode06(struct SongSeq *seq)
 	cseq_opcode_from06and07(seq);
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a3d4-0x8002a400
 void cseq_opcode07(struct SongSeq *seq)
 {
 	u8 *note = seq->currNote;
@@ -231,98 +262,83 @@ void cseq_opcode07(struct SongSeq *seq)
 	cseq_opcode_from06and07(seq);
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a400-0x8002a494
 void cseq_opcode08(struct SongSeq *seq)
 {
-	struct ChannelStats *curr, *backupNext;
+	struct ChannelStats *curr;
 	u8 *currNote = seq->currNote;
-	int soundID = seq->soundID;
 
-	for (curr = (struct ChannelStats *)sdata->channelTaken.first; curr != NULL; curr = backupNext)
+	for (curr = (struct ChannelStats *)GAME_CHANNEL_TAKEN.first; curr != NULL; curr = (struct ChannelStats *)curr->link.links.next)
 	{
-		backupNext = curr->next;
-
 		if (curr->type != HOWL_CHANNEL_TYPE_MUSIC)
 		{
 			continue;
 		}
 
-		// not the sound needed to turn off
-		if (curr->soundID != soundID)
+		// only update this sequence's channels
+		if (curr->soundID != seq->soundID)
 		{
 			continue;
 		}
 
 		// set reverb
-		sdata->channelAttrNew[curr->channelID].reverb = currNote[1];
+		GAME_CHANNEL_ATTR_NEW[curr->channelID].reverb = currNote[1];
 
 		// update Reverb (reverberation = echo)
-		sdata->ChannelUpdateFlags[curr->channelID] |= HOWL_CHANNEL_UPDATE_REVERB;
+		GAME_CHANNEL_UPDATE_FLAGS[curr->channelID] |= HOWL_CHANNEL_UPDATE_REVERB;
 	}
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a494-0x8002a4a8
 void cseq_opcode09(struct SongSeq *seq)
 {
 	u8 *currNote = seq->currNote;
 	seq->instrumentID = currNote[1];
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a4a8-0x8002a63c
 void cseq_opcode0a(struct SongSeq *seq)
 {
-	int pitch;
-	struct ChannelStats *curr, *backupNext;
-	int soundID = seq->soundID;
+	struct ChannelStats *curr;
 
 	u8 *currNote = seq->currNote;
 	seq->distort = currNote[1];
 
-	for (curr = (struct ChannelStats *)sdata->channelTaken.first; curr != NULL; curr = backupNext)
+	for (curr = (struct ChannelStats *)GAME_CHANNEL_TAKEN.first; curr != NULL; curr = (struct ChannelStats *)curr->link.links.next)
 	{
-		backupNext = curr->next;
-
 		if (curr->type != HOWL_CHANNEL_TYPE_MUSIC)
 		{
 			continue;
 		}
 
-		// not the sound needed to turn off
-		if (curr->soundID != soundID)
+		// only update this sequence's channels
+		if (curr->soundID != seq->soundID)
 		{
 			continue;
 		}
 
-		int index = curr->drumIndex_pitchIndex;
-
-		// instrument
-		if ((seq->flags & 4) == 0)
-		{
-			struct SampleInstrument *longSample = &sdata->ptrCseqLongSamples[seq->instrumentID];
-
-			pitch = howl_InstrumentPitch(longSample->basePitch, index, seq->distort);
-		}
-
 		// drums
-		else
+		if ((seq->flags & 4) != 0)
 		{
-			struct SampleDrums *shortSample = &sdata->ptrCseqShortSamples[index];
+			struct SampleDrums *shortSample = &sdata->ptrCseqShortSamples[curr->drumIndex_pitchIndex];
 
-			if (seq->distort == HOWL_SFX_DISTORTION_NONE)
+			if (seq->distort != HOWL_SFX_DISTORTION_NONE)
 			{
-				pitch = shortSample->pitch;
+				// NOTE(aalhendi): Resolve the destination before the table lookup for retail page order.
+				struct ChannelAttr *attr = &GAME_CHANNEL_ATTR_NEW[curr->channelID];
+				attr->pitch = CTR_MipsSrl(CTR_MipsMulLo((u16)shortSample->pitch, GAME_DISTORT_CONST_OTHER_FX[seq->distort]), 16);
 			}
-
 			else
 			{
-				pitch = CTR_MipsSrl(CTR_MipsMulLo((u16)shortSample->pitch, data.distortConst_OtherFX[seq->distort]), 16);
+				GAME_CHANNEL_ATTR_NEW[curr->channelID].pitch = (u16)shortSample->pitch;
 			}
 		}
 
-		// save pitch
-		sdata->channelAttrNew[curr->channelID].pitch = pitch;
+		// instrument
+		else
+		{
+			struct SampleInstrument *longSample = &sdata->ptrCseqLongSamples[seq->instrumentID];
+			GAME_CHANNEL_ATTR_NEW[curr->channelID].pitch = howl_InstrumentPitch(longSample->basePitch, curr->drumIndex_pitchIndex, seq->distort);
+		}
 
 		// update pitch
-		sdata->ChannelUpdateFlags[curr->channelID] |= HOWL_CHANNEL_UPDATE_PITCH;
+		GAME_CHANNEL_UPDATE_FLAGS[curr->channelID] |= HOWL_CHANNEL_UPDATE_PITCH;
 	}
 }

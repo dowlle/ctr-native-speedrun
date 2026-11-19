@@ -1,188 +1,173 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-audited NTSC-U 926 0x80032ffc-0x80033108.
-// packID will always be 3-gGT->activeMempackIndex
+// packID will always be 3-GAME_TRACKER->activeMempackIndex
 void LOAD_Hub_ReadFile(struct BigHeader *bigfile, int levID, int packID)
 {
-	struct GameTracker *gGT = sdata->gGT;
+	register int levelToLoad CTR_PSX_REGISTER("$17") = levID;
+#if !defined(CTR_NATIVE)
+	register int subfileIndex CTR_PSX_REGISTER("$2");
+#endif
 
 	// if level is already loaded, quit
-	if (gGT->levID_in_each_mempack[packID] == levID)
+	if (GAME_TRACKER->levID_in_each_mempack[packID] == levelToLoad)
 	{
 		return;
 	}
 
 	sdata->modelMaskHints3D = 0;
+	CTR_PSX_MEMORY_BARRIER();
 
 	// Swap to pack of hub you're NOT on,
 	// wipe the pack to reload the new hub
 	MEMPACK_SwapPacks(packID);
 	MEMPACK_ClearLowMem();
 
-	sdata->PatchMem_Size = LOAD_HUB_PATCH_MEM_ACTIVE;
-	gGT->level2 = 0;
-	gGT->levID_in_each_mempack[packID] = levID;
+#if defined(CTR_NATIVE)
+	sdata->load_inProgress = 1;
+	GAME_TRACKER->level2 = 0;
+	GAME_TRACKER->levID_in_each_mempack[packID] = levelToLoad;
+#else
+	{
+		register struct GameTracker *gGT CTR_PSX_REGISTER("$2") = GAME_TRACKER;
+		register int levelID CTR_PSX_REGISTER("$4") = levelToLoad;
+		register int loadingFlag CTR_PSX_REGISTER("$5") = 1;
+		register int fileType CTR_PSX_REGISTER("$6") = LVI_VRAM;
+		// NOTE(aalhendi): Retail stores from a1 after an otherwise dead copy to v1.
+		__asm__ volatile("move $3,$5\n\tsw $5,%0" : "=m"(sdata->load_inProgress) : "r"(gGT), "r"(levelID), "r"(loadingFlag), "r"(fileType) : "$3");
+		gGT->level2 = 0;
+		gGT->levID_in_each_mempack[packID] = levelToLoad;
+	}
+#endif
 
-	LOAD_AppendQueue(bigfile, LT_VRAM, LOAD_GetBigfileIndex(levID, LOAD_LEVEL_LOD_1P, LVI_VRAM), NULL, NULL);
-	LOAD_AppendQueue(bigfile, LT_GETADDR, LOAD_GetBigfileIndex(levID, LOAD_LEVEL_LOD_1P, LVI_LEV), NULL, LOAD_Callback_LEV);
-	LOAD_AppendQueue(bigfile, LT_SETADDR, LOAD_GetBigfileIndex(levID, LOAD_LEVEL_LOD_1P, LVI_PTR), sdata->PatchMem_Ptr, LOAD_HubCallback);
+	LOAD_AppendQueue(bigfile, LT_VRAM, LOAD_GetBigfileIndex(levelToLoad, LOAD_LEVEL_LOD_1P, LVI_VRAM), NULL, NULL);
+	LOAD_AppendQueue(bigfile, LT_GETADDR, LOAD_GetBigfileIndex(levelToLoad, LOAD_LEVEL_LOD_1P, LVI_LEV), NULL, LOAD_Callback_LEV);
+#if defined(CTR_NATIVE)
+	LOAD_AppendQueue(bigfile, LT_SETADDR, LOAD_GetBigfileIndex(levelToLoad, LOAD_LEVEL_LOD_1P, LVI_PTR), sdata->PatchMem_Ptr, LOAD_HubCallback);
+#else
+	// NOTE(aalhendi): Retail stores the fifth argument in the call delay slot;
+	// GCC 2.8.1 otherwise stores it early and schedules the index move there.
+	subfileIndex = LOAD_GetBigfileIndex(levelToLoad, LOAD_LEVEL_LOD_1P, LVI_PTR);
+	__asm__ volatile(".set\tnoreorder\n\t"
+	                 "move $4,%1\n\t"
+	                 "li $5,%3\n\t"
+	                 "move $6,%0\n\t"
+	                 "lui $2,%%hi(LOAD_HubCallback)\n\t"
+	                 "lw $7,%2\n\t"
+	                 "addiu $2,$2,%%lo(LOAD_HubCallback)\n\t"
+	                 "jal LOAD_AppendQueue\n\t"
+	                 "sw $2,16($sp)\n\t"
+	                 ".set\treorder"
+	                 : "+r"(subfileIndex)
+	                 : "r"(bigfile), "m"(sdata->PatchMem_Ptr), "i"(LT_SETADDR)
+	                 : "$3", "$4", "$5", "$6", "$7", "$31", "memory");
+#endif
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80033108-0x80033318.
 void LOAD_Hub_SwapNow()
 {
-	struct Level *level1;
-	struct VisMem *visMem;
-	struct CameraDC *cDC;
-	struct GameTracker *gGT = sdata->gGT;
-
 	// stall until load is done
-	while (gGT->level2 == 0)
+	while (GAME_TRACKER->level2 == 0)
 	{
 		LOAD_NextQueuedFile();
 		VSync(0);
 	}
 
-	// Aug 5
-	// ptrintf("gGT->level2 = 0x%08x\n",gGT->level2);
-	// ptrintf("SWAPPING 1...\n");
+	LevInstDef_RePack(GAME_TRACKER->level1->ptr_mesh_info, 1);
 
-	LevInstDef_RePack(gGT->level1->ptr_mesh_info, 1);
-
-	// Aug 5
-	// ptrintf("SWAPPING 2...\n");
-
-	LOAD_HubSwapPtrs(gGT);
+	LOAD_HubSwapPtrs(GAME_TRACKER, 1);
 
 	// 0,1,2
-	gGT->activeMempackIndex = LOAD_HUB_MEMPACK_PAIR_INDEX_SUM - gGT->activeMempackIndex;
+	GAME_TRACKER->activeMempackIndex = LOAD_HUB_MEMPACK_PAIR_INDEX_SUM - GAME_TRACKER->activeMempackIndex;
 
-	gGT->prevLEV = gGT->levelID;
-	gGT->levelID = gGT->levID_in_each_mempack[gGT->activeMempackIndex];
+	GAME_TRACKER->prevLEV = GAME_TRACKER->levelID;
+	GAME_TRACKER->levelID = GAME_TRACKER->levID_in_each_mempack[GAME_TRACKER->activeMempackIndex];
 
-	Audio_AdvHub_SwapSong(gGT->levelID);
+	Audio_AdvHub_SwapSong(GAME_TRACKER->levelID);
 
-	// Aug 5
-	// ptrintf("SWAPPING 3...\n");
+	LibraryOfModels_Clear(GAME_TRACKER);
 
-	LibraryOfModels_Clear(gGT);
-
-	/*
-	In Aug 5
-	if (sdata->PLYROBJECTLIST == 0)
-	{
-	    printf("ERROR: No PLYROBJECTLIST!\n");
-	}
-	*/
-
-	if (sdata->PLYROBJECTLIST != 0)
+	if (GAME_PLAYER_OBJECT_LIST != 0)
 	{
 		LOAD_GlobalModelPtrs_MPK();
 	}
 
-	level1 = gGT->level1;
-
-	/*
-	In Aug 5
-	if (level1 == 0)
+	if (GAME_TRACKER->level1 != 0)
 	{
-	    printf("ERROR: No LEVEL!\n");
-	}
-	*/
+		LibraryOfModels_Store(GAME_TRACKER, GAME_TRACKER->level1->numModels, GAME_TRACKER->level1->ptrModelsPtrArray);
 
-	if (level1 != 0)
-	{
-		LibraryOfModels_Store(gGT, level1->numModels, level1->ptrModelsPtrArray);
+		INSTANCE_LevInitAll(GAME_TRACKER->level1->ptrInstDefs, GAME_TRACKER->level1->numInstances);
 
-		INSTANCE_LevInitAll(level1->ptrInstDefs, level1->numInstances);
+		LevInstDef_UnPack(GAME_TRACKER->level1->ptr_mesh_info);
 
-		LevInstDef_UnPack(level1->ptr_mesh_info);
-
-		DecalGlobal_Store(gGT, level1->levTexLookup);
+		DecalGlobal_Store(GAME_TRACKER, GAME_TRACKER->level1->levTexLookup);
 	}
 
-	MEMPACK_SwapPacks(gGT->activeMempackIndex);
-	MainInit_VisMem(gGT);
+	MEMPACK_SwapPacks(GAME_TRACKER->activeMempackIndex);
+	MainInit_VisMem(GAME_TRACKER);
 
-	cDC = &gGT->cameraDC[0];
-	cDC->ptrQuadBlock = 0;
-	cDC->visLeafSrc = 0;
-	cDC->visFaceSrc = 0;
-	cDC->visInstSrc = 0;
-	cDC->visOVertSrc = 0;
-	cDC->visSCVertSrc = 0;
+	GAME_TRACKER->cameraDC[0].ptrQuadBlock = 0;
+	GAME_TRACKER->cameraDC[0].visInstSrc = 0;
+	GAME_TRACKER->cameraDC[0].visLeafSrc = 0;
+	GAME_TRACKER->cameraDC[0].visFaceSrc = 0;
+	GAME_TRACKER->cameraDC[0].visOVertSrc = 0;
+	GAME_TRACKER->cameraDC[0].visSCVertSrc = 0;
 
-	visMem = gGT->visMem1;
-	visMem->visLeafSrc[0] = 0;
-	visMem->visFaceSrc[0] = 0;
-	visMem->visOVertSrc[0] = 0;
-	visMem->visSCVertSrc[0] = 0;
+	GAME_TRACKER->visMem1->visLeafSrc[0] = 0;
+	GAME_TRACKER->visMem1->visFaceSrc[0] = 0;
+	GAME_TRACKER->visMem1->visOVertSrc[0] = 0;
+	GAME_TRACKER->visMem1->visSCVertSrc[0] = 0;
 
-	gGT->drivers[0]->underDriver = 0;
+	GAME_TRACKER->drivers[0]->underDriver = 0;
 
-	gGT->framesInThisLEV = 0;
-	gGT->msInThisLEV = 0;
+	GAME_TRACKER->framesInThisLEV = 0;
+	GAME_TRACKER->msInThisLEV = 0;
 }
 
-// NOTE(aalhendi): Native mirrors retail rdata 0x80011180 because CTR_NATIVE
-// does not expose the retail rdata object.
-#if defined(CTR_NATIVE)
-static const int s_advHubConnectedLevID[LOAD_ADV_HUB_COUNT][LOAD_ADV_HUB_CONNECTION_COUNT] = {
-    {N_SANITY_BEACH, THE_LOST_RUINS, -1},
-    {GEM_STONE_VALLEY, GLACIER_PARK, -1},
-    {GEM_STONE_VALLEY, GLACIER_PARK, -1},
-    {N_SANITY_BEACH, THE_LOST_RUINS, CITADEL_CITY},
-    {GLACIER_PARK, -1, -1},
-};
-#define LOAD_HUB_CONNECTED_LEV(hub, index) s_advHubConnectedLevID[(hub)][(index)]
-#else
-#define LOAD_HUB_CONNECTED_LEV(hub, index) rdata.MetaDataHubs[(hub)].connectedHub_LevID[(index)]
-#endif
-
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80033318-0x80033474.
 void LOAD_Hub_Main(struct BigHeader *bigfilePtr)
 {
-	struct GameTracker *gGT;
+	// NOTE(aalhendi): Retail copies this table from rdata to the stack before scanning players.
+	int connectedLevID[LOAD_ADV_HUB_COUNT][LOAD_ADV_HUB_CONNECTION_COUNT] = {
+	    {N_SANITY_BEACH, THE_LOST_RUINS, -1},
+	    {GEM_STONE_VALLEY, GLACIER_PARK, -1},
+	    {GEM_STONE_VALLEY, GLACIER_PARK, -1},
+	    {N_SANITY_BEACH, THE_LOST_RUINS, CITADEL_CITY},
+	    {GLACIER_PARK, -1, -1},
+	};
+	int i;
 
-	// quit if already loading
-	if (sdata->Loading.stage != LOAD_IDLE)
+	for (i = 0; i < GAME_TRACKER->numPlyrCurrGame; i++)
 	{
-		return;
-	}
+		s32 stepFlagSet;
+		int nextLevelID;
+		int needSwapNow;
 
-	gGT = sdata->gGT;
-
-	for (int i = 0; i < gGT->numPlyrCurrGame; i++)
-	{
-		CollStepFlags stepFlagSet = gGT->drivers[i]->stepFlagSet;
-		int nextLevelID = (stepFlagSet & COLL_STEP_TRIGGER_HUB_LEVEL_ID_MASK) >> COLL_STEP_TRIGGER_HUB_LEVEL_ID_SHIFT;
-		int needSwapNow = (stepFlagSet & COLL_STEP_TRIGGER_HUB_SWAP_NOW_MASK) >> COLL_STEP_TRIGGER_HUB_SWAP_NOW_SHIFT;
-
-		// if new level does not need to load
-		if (nextLevelID == LOAD_HUB_TRIGGER_NONE)
+		if (GAME_LOADING_STAGE != LOAD_IDLE)
 		{
-			if ((needSwapNow != 0) || (gGT->bool_AdvHub_NeedToSwapLEV != 0))
-			{
-				gGT->bool_AdvHub_NeedToSwapLEV = 0;
-				LOAD_Hub_SwapNow();
-			}
+			continue;
 		}
 
-		// if new level needs to load
+		stepFlagSet = GAME_TRACKER->drivers[i]->stepFlagSet;
+		nextLevelID = (stepFlagSet & COLL_STEP_TRIGGER_HUB_LEVEL_ID_MASK) >> COLL_STEP_TRIGGER_HUB_LEVEL_ID_SHIFT;
+		needSwapNow = (stepFlagSet & COLL_STEP_TRIGGER_HUB_SWAP_NOW_MASK) >> COLL_STEP_TRIGGER_HUB_SWAP_NOW_SHIFT;
+
+		if (nextLevelID != LOAD_HUB_TRIGGER_NONE)
+		{
+			u32 currLevelID = GAME_TRACKER->levelID - GEM_STONE_VALLEY;
+
+			// Only AdvHub levels 0-4 have connections; other modes can reach this path.
+			if (currLevelID < LOAD_ADV_HUB_COUNT)
+			{
+				LOAD_Hub_ReadFile(bigfilePtr, connectedLevID[currLevelID][nextLevelID - LOAD_HUB_TRIGGER_ID_BIAS],
+				                  LOAD_HUB_MEMPACK_PAIR_INDEX_SUM - GAME_TRACKER->activeMempackIndex);
+			}
+		}
 		else
 		{
-			// only in AdvHub, or else the game
-			// crashes in 4P Nitro Court Life Limit
-			u32 currLevelID = gGT->levelID - GEM_STONE_VALLEY;
-
-			// ctr hubs are 0-4
-			if (currLevelID >= LOAD_ADV_HUB_COUNT)
+			if ((needSwapNow != 0) || (GAME_TRACKER->bool_AdvHub_NeedToSwapLEV != 0))
 			{
-				return;
+				GAME_TRACKER->bool_AdvHub_NeedToSwapLEV = 0;
+				LOAD_Hub_SwapNow();
 			}
-
-			LOAD_Hub_ReadFile(bigfilePtr, LOAD_HUB_CONNECTED_LEV(currLevelID, nextLevelID - LOAD_HUB_TRIGGER_ID_BIAS),
-			                  LOAD_HUB_MEMPACK_PAIR_INDEX_SUM - gGT->activeMempackIndex);
 		}
 	}
 }

@@ -1,16 +1,26 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80031c1c-0x80031c58.
+#ifndef CTR_NATIVE
+#include <psx/hwregs.h>
+#endif
+
 void LOAD_StringToUpper(char *path)
 {
-	for (u8 *letter = (u8 *)path; *letter != 0; letter++)
+	u8 *letter;
+	u8 character;
+
+	letter = (u8 *)path;
+	character = *letter;
+	while (character != 0)
 	{
 		// if lowercase letter
-		if ((u32)(*letter - 0x61) < 0x1a)
+		if ((u32)(character - 0x61) < 0x1a)
 		{
 			// uppercase
-			*letter -= 0x20;
+			*letter = character + 0xe0;
 		}
+		letter++;
+		character = *letter;
 	}
 }
 
@@ -18,27 +28,37 @@ void LOAD_StringToUpper(char *path)
 #include <platform/native_cd.h>
 #endif
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8007c118-0x8007c208.
 int LOAD_InitCDvol(void)
 {
 #ifndef CTR_NATIVE
-	if ((SPU_CURRENT_VOL_L == 0) && (SPU_CURRENT_VOL_R == 0))
+	volatile CdlATV volume;
+	volatile u16 *spu;
+
+	spu = psxSpuRegs;
+	if ((spu[0x1b8 / 2] == 0) && (spu[0x1ba / 2] == 0))
 	{
-		SPU_MASTER_VOL_L = 0x3fff;
-		SPU_MASTER_VOL_R = 0x3fff;
+		spu[0x180 / 2] = 0x3fff;
+		spu[0x182 / 2] = 0x3fff;
 	}
 
-	SPU_CD_VOL_L = 0x3fff;
-	SPU_CD_VOL_R = 0x3fff;
-	SPU_CTRL = 0xc001;
+	spu = psxSpuRegs;
+	spu[0x1b0 / 2] = 0x3fff;
+	spu[0x1b2 / 2] = 0x3fff;
+	spu[0x1aa / 2] = 0xc001;
 
-	CD_REG(0) = 2;
-	CD_REG(2) = 0x80;
-	CD_REG(3) = 0;
-	CD_REG(0) = 3;
-	CD_REG(1) = 0x80;
-	CD_REG(2) = 0;
-	CD_REG(3) = 0x20;
+	// NOTE(aalhendi): Keep the attenuator's byte stores and reads explicit;
+	// volatile chained assignments add rereads with the retail compiler.
+	volume.val2 = 0x80;
+	volume.val0 = 0x80;
+	volume.val3 = 0;
+	volume.val1 = 0;
+	*psxCdReg0 = 2;
+	*psxCdReg2 = volume.val0;
+	*psxCdReg3 = volume.val1;
+	*psxCdReg0 = 3;
+	*psxCdReg1 = volume.val2;
+	*psxCdReg2 = volume.val3;
+	*psxCdReg3 = 0x20;
 #else
 	// NOTE(aalhendi): Retail CdInit calls this hook to reset SPU volume
 	// state before howl_InitGlobals re-applies game defaults. Native has
@@ -53,7 +73,6 @@ int LOAD_InitCDvol(void)
 	return 0;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80031c58-0x80031c78 for the retail path.
 void LOAD_InitCD()
 {
 #ifdef CTR_NATIVE
@@ -69,26 +88,29 @@ void LOAD_InitCD()
 	CDSYS_Init(1);
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80031c78-0x80031d30
 void *LOAD_ReadDirectory(char *filename)
 {
-	CdlFILE cdlFile;
 	u8 buf[8];
+	CdlFILE cdlFile;
+	CdlFILE *filePtr;
+	struct BigHeader *bh;
+	struct BigHeader *result;
 
+	filePtr = &cdlFile;
 	CDSYS_SetMode_StreamData();
 
-	if (CdSearchFile(&cdlFile, filename) == NULL)
+	if (CdSearchFile(filePtr, filename) == NULL)
 	{
 		return NULL;
 	}
 
-	struct BigHeader *bh = MEMPACK_AllocMem(LOAD_BIGFILE_HEADER_ALLOC_BYTES /*, filename*/);
+	bh = MEMPACK_AllocMem(LOAD_BIGFILE_HEADER_ALLOC_BYTES, filename);
 
 	// Search for file on disc
 	// Set Cd laser to file position
 	// Read the bigfile header
 	// Wait for read to end
-	CdControl(CdlSetloc, (u8 *)&cdlFile, buf);
+	CdControl(CdlSetloc, (u8 *)filePtr, buf);
 	if (CdRead(LOAD_BIGFILE_HEADER_SECTORS, (u32 *)bh, CdlModeSpeed) == 0)
 	{
 		return NULL;
@@ -100,20 +122,23 @@ void *LOAD_ReadDirectory(char *filename)
 	}
 
 	// Save position
-	bh->cdpos = CdPosToInt(&cdlFile.pos);
+	bh->cdpos = CdPosToInt(&filePtr->pos);
 
 	// undo header allocation, only use "needed" size
 	MEMPACK_ReallocMem(sizeof(struct BigHeader) + sizeof(struct BigEntry) * bh->numEntry);
 
-	sdata->ptrBigfileCdPos_2 = bh;
-	return bh;
+	// NOTE(aalhendi): Retail copies the result before publishing the pointer;
+	// keep the store out of the epilogue jump's delay slot.
+	CTR_PSX_COPY_VALUE(result, bh);
+	sdata->ptrBigfileCdPos_2 = result;
+	CTR_PSX_MEMORY_BARRIER();
+	return result;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 PS1 path 0x80031d30-0x80031e00.
 void LOAD_DramFileCallback(struct LoadQueueSlot *lqs)
 {
 	char *fileBuf = lqs->ptrDestination;
-	void (*callback)(struct LoadQueueSlot *) = lqs->callbackFuncPtr;
+	void (*callback)(struct LoadQueueSlot *);
 
 	if (fileBuf != NULL)
 	{
@@ -140,24 +165,25 @@ void LOAD_DramFileCallback(struct LoadQueueSlot *lqs)
 			lqs->flags |= LT_GETADDR;
 		}
 
-		lqs->ptrDestination = &fileBuf[4];
+		lqs->ptrDestination = (char *)lqs->ptrDestination + 4;
 	}
+
+	callback = lqs->callbackFuncPtr;
 
 #if defined(CTR_NATIVE)
 	// NOTE(aalhendi): CTR_NATIVE keeps host callback pointers and queue sentinels.
 	if ((callback != NULL) && (callback != LOAD_DramFileCallback) && (callback != (void (*)(struct LoadQueueSlot *))-1) &&
 	    (callback != LOAD_QUEUE_CALLBACK_SET_POINTER))
 #else
-	if ((callback != NULL) && (((u32)(uintptr_t)callback & 0xff000000) == 0x80000000))
+	if ((callback != NULL) && (((u32)callback & 0xff000000) == 0x80000000))
 #endif
 	{
 		callback(lqs);
 	}
 
-	sdata->queueReady = 1;
+	GAME_LOAD_QUEUE_READY = 1;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80031e00-0x80031ee4.
 void *LOAD_DramFile(void *bigfilePtr, int subfileIndex, void *ptrDestination, u32 *sizePtr, int callbackOrFlags)
 {
 	struct LoadQueueSlot lqs;
@@ -165,19 +191,18 @@ void *LOAD_DramFile(void *bigfilePtr, int subfileIndex, void *ptrDestination, u3
 
 	if (callbackOrFlags == -1)
 	{
-		loadedFile = LOAD_ReadFile_ex(bigfilePtr, LT_GETADDR, subfileIndex, ptrDestination, sizePtr, NULL);
-
 		lqs.ptrBigfileCdPos_UNUSED = bigfilePtr;
 		lqs.flags = 0;
 		lqs.type_UNUSED = LT_DRAM;
 		lqs.subfileIndex = subfileIndex;
-		lqs.ptrDestination = loadedFile;
+		lqs.ptrDestination = LOAD_ReadFile_ex(bigfilePtr, LT_GETADDR, subfileIndex, ptrDestination, sizePtr, NULL);
 		lqs.size_UNUSED = *sizePtr;
 		lqs.callbackFuncPtr = NULL;
 
 		LOAD_DramFileCallback(&lqs);
 
-		return loadedFile;
+		// NOTE(aalhendi): DRAM relocation has advanced this slot past its header.
+		return lqs.ptrDestination;
 	}
 
 	if (callbackOrFlags == -2)
@@ -191,45 +216,46 @@ void *LOAD_DramFile(void *bigfilePtr, int subfileIndex, void *ptrDestination, u3
 	return LOAD_ReadFile_ex(bigfilePtr, LT_GETADDR, subfileIndex, ptrDestination, sizePtr, LOAD_DramFileCallback);
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80031ee4-0x80031fdc.
 void LOAD_VramFileCallback(struct LoadQueueSlot *lqs)
 {
-	int *vramBuf = lqs->ptrDestination;
+	RECT rect;
+	struct VramHeader *vh = lqs->ptrDestination;
 
-	struct VramHeader *vh = (struct VramHeader *)vramBuf;
-
-	// if just one TIM
-	if ((vramBuf != NULL) && (vramBuf[0] != 0x20))
+	if (vh != NULL)
 	{
-		LoadImage(&vh->rect, VRAMHEADER_GETPIXLES(vh));
-	}
-
-	// if multiple TIMs are packed together
-	if ((vramBuf != NULL) && (vramBuf[0] == 0x20))
-	{
-		int size;
-		vramBuf++;
-
-		size = vramBuf[0];
-		vh = (struct VramHeader *)&vramBuf[1];
-
-		while (size != 0)
+		// Packed TIMs start with the container tag and record lengths.
+		if (*(int *)vh == 0x20)
 		{
-			LoadImage(&vh->rect, VRAMHEADER_GETPIXLES(vh));
-
-			// goto next
-			vramBuf = (int *)((u8 *)vh + size);
-
-			size = vramBuf[0];
-			vh = (struct VramHeader *)&vramBuf[1];
+			int size;
+			vh = (struct VramHeader *)((int *)vh + 1);
+			size = *(int *)vh;
+			vh = (struct VramHeader *)((int *)vh + 1);
+			while (size != 0)
+			{
+				rect.x = vh->rect.x;
+				rect.y = vh->rect.y;
+				rect.w = vh->rect.w;
+				rect.h = vh->rect.h;
+				LoadImage(&rect, VRAMHEADER_GETPIXLES(vh));
+				vh = (struct VramHeader *)((int *)vh + (size >> 2));
+				size = *(int *)vh;
+				vh = (struct VramHeader *)((int *)vh + 1);
+			}
+		}
+		else
+		{
+			rect.x = vh->rect.x;
+			rect.y = vh->rect.y;
+			rect.w = vh->rect.w;
+			rect.h = vh->rect.h;
+			LoadImage(&rect, VRAMHEADER_GETPIXLES(vh));
 		}
 	}
 
 	// LOAD_NextQueuedFile waits 3 vsync frames before releasing the queue.
-	sdata->frameFinishedVRAM = sdata->gGT->frameTimer_VsyncCallback;
+	GAME_LOAD_VRAM_FINISHED = GAME_TRACKER->frameTimer_VsyncCallback;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80031fdc-0x80032110.
 void *LOAD_VramFile(void *bigfilePtr, int subfileIndex, void *ptrDestination, u32 *sizePtr, int callbackOrFlags)
 {
 	struct LoadQueueSlot lqs;
@@ -242,27 +268,25 @@ void *LOAD_VramFile(void *bigfilePtr, int subfileIndex, void *ptrDestination, u3
 
 	if (callbackOrFlags == -1)
 	{
-		loadedFile = LOAD_ReadFile_ex(bigfilePtr, LT_VRAM, subfileIndex, ptrDestination, sizePtr, NULL);
-
 		lqs.ptrBigfileCdPos_UNUSED = bigfilePtr;
 		lqs.flags = 0;
 		lqs.type_UNUSED = LT_VRAM;
 		lqs.subfileIndex = subfileIndex;
-		lqs.ptrDestination = loadedFile;
+		lqs.ptrDestination = LOAD_ReadFile_ex(bigfilePtr, LT_VRAM, subfileIndex, ptrDestination, sizePtr, NULL);
 		lqs.size_UNUSED = *sizePtr;
 		lqs.callbackFuncPtr = NULL;
 
 		LOAD_VramFileCallback(&lqs);
 
 		VSync(2);
-		sdata->frameFinishedVRAM = 0;
+		GAME_LOAD_VRAM_FINISHED = 0;
 
 		if (ptrDestination == NULL)
 		{
 			MEMPACK_PopState();
 		}
 
-		return loadedFile;
+		return lqs.ptrDestination;
 	}
 
 	if (callbackOrFlags == -2)
@@ -276,17 +300,15 @@ void *LOAD_VramFile(void *bigfilePtr, int subfileIndex, void *ptrDestination, u3
 	return LOAD_ReadFile_ex(bigfilePtr, LT_VRAM, subfileIndex, ptrDestination, sizePtr, LOAD_VramFileCallback);
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80032110-0x800321b4.
-void LOAD_ReadFileASyncCallback(u8 result, u8 *unk)
+void LOAD_ReadFileASyncCallback(u8 result, u8 *unused)
 {
-	(void)unk;
+	(void)unused;
 	CdReadCallback(0);
 	result &= 0xff;
 
-	struct LoadQueueSlot *lqs = &data.currSlot;
-
 	if (result == CdlComplete)
 	{
+		struct LoadQueueSlot *lqs = &data.currSlot;
 #if defined(CTR_NATIVE)
 		if ((lqs->flags & LT_MEMPACK) != 0)
 #else
@@ -306,13 +328,13 @@ void LOAD_ReadFileASyncCallback(u8 result, u8 *unk)
 	else
 	{
 #if defined(CTR_NATIVE)
-		if ((lqs->flags & LT_MEMPACK) != 0)
+		if ((data.currSlot.flags & LT_MEMPACK) != 0)
 #else
-		if ((lqs->flags & LT_SETADDR) != 0)
+		if ((data.currSlot.flags & LT_SETADDR) != 0)
 #endif
 		{
 			// undo allocation, try again
-			MEMPACK_ReallocMem(0);
+			MEMPACK_PopState();
 		}
 
 		sdata->queueRetry = 1;
@@ -321,15 +343,15 @@ void LOAD_ReadFileASyncCallback(u8 result, u8 *unk)
 
 void *LOAD_ReadFile_ex(struct BigHeader *bigfile, u32 loadType, int subfileIndex, void *ptrDst, u32 *sizePtr, void (*callback)(struct LoadQueueSlot *))
 {
-	int uVar5;
+	b32 commandSuccess;
 	CdlLOC cdLoc;
 	u8 paramOutput[8];
-	void *originalDst;
+	void *originalDst = ptrDst;
 	int sectorSize;
-	int sectorCount;
-	int readComplete;
+	// NOTE(aalhendi): The initial success state stays live across CD setup on GCC 2.8.
+	register b32 readComplete = 1;
+	struct BigEntry *entry;
 
-	// NOTE(aalhendi): ASM-verified NTSC-U 926 PS1 path 0x800321b4-0x80032344.
 	(void)loadType;
 	CDSYS_SetMode_StreamData();
 
@@ -343,22 +365,17 @@ void *LOAD_ReadFile_ex(struct BigHeader *bigfile, u32 loadType, int subfileIndex
 #endif
 
 	// get size and offset of subfile
-	struct BigEntry *entry = BIG_GETENTRY(bigfile);
-	int eSize = entry[subfileIndex].size;
-	int eOffs = entry[subfileIndex].offset;
+	entry = BIG_GETENTRY((struct BigHeader *)((char *)bigfile + subfileIndex * sizeof(struct BigEntry)));
+	// NOTE(aalhendi): Publish size before reading offset; sizePtr may alias the entry.
+	*sizePtr = entry->size;
+	commandSuccess = 0;
 
-	*sizePtr = eSize;
-
-	CdIntToPos(bigfile->cdpos + eOffs, &cdLoc);
-
-	struct LoadQueueSlot *lqs = &data.currSlot;
-	originalDst = ptrDst;
-	sectorCount = (eSize + LOAD_CD_DATA_SECTOR_ROUND_MASK) >> LOAD_CD_DATA_SECTOR_SHIFT;
-	readComplete = 1;
+	CdIntToPos(bigfile->cdpos + entry->offset, &cdLoc);
 
 	// If no address given, then find one.
 	if (ptrDst == NULL)
 	{
+		struct LoadQueueSlot *lqs = &data.currSlot;
 #if defined(CTR_NATIVE)
 		lqs->flags |= LT_MEMPACK;
 #else
@@ -367,15 +384,16 @@ void *LOAD_ReadFile_ex(struct BigHeader *bigfile, u32 loadType, int subfileIndex
 
 		// allocate room for all sectors,
 		// remove alignment before next Read
-		sectorSize = sectorCount << LOAD_CD_DATA_SECTOR_SHIFT;
-		ptrDst = (void *)MEMPACK_AllocMem(sectorSize); // "FILE"
+		sectorSize = ((*sizePtr + LOAD_CD_DATA_SECTOR_ROUND_MASK) >> LOAD_CD_DATA_SECTOR_SHIFT) << LOAD_CD_DATA_SECTOR_SHIFT;
+		ptrDst = (void *)MEMPACK_AllocMem(sectorSize, GAME_LOAD_FILE_LABEL);
 		if (ptrDst == NULL)
 		{
-			return NULL;
+			return (void *)commandSuccess;
 		}
 	}
 	else
 	{
+		struct LoadQueueSlot *lqs = &data.currSlot;
 #if defined(CTR_NATIVE)
 		lqs->flags &= ~LT_MEMPACK;
 #else
@@ -386,13 +404,13 @@ void *LOAD_ReadFile_ex(struct BigHeader *bigfile, u32 loadType, int subfileIndex
 #if defined(CTR_NATIVE)
 	// NOTE(aalhendi): native CD reads can call back before wrapper callers store
 	// the returned pointer back into data.currSlot.
-	lqs->ptrDestination = ptrDst;
-	lqs->size_UNUSED = eSize;
+	data.currSlot.ptrDestination = ptrDst;
+	data.currSlot.size_UNUSED = *sizePtr;
 #endif
 
-	while (1)
+	while ((commandSuccess == 0) || (readComplete == 0))
 	{
-		uVar5 = CdControl(CdlSetloc, (u8 *)&cdLoc, &paramOutput[0]);
+		commandSuccess = CdControl(CdlSetloc, (u8 *)&cdLoc, &paramOutput[0]);
 
 		if (callback != NULL)
 		{
@@ -405,18 +423,12 @@ void *LOAD_ReadFile_ex(struct BigHeader *bigfile, u32 loadType, int subfileIndex
 			CdReadCallback(NULL);
 		}
 
-		uVar5 &= CdRead(sectorCount, ptrDst, CdlModeSpeed);
+		commandSuccess &= CdRead((*sizePtr + LOAD_CD_DATA_SECTOR_ROUND_MASK) >> LOAD_CD_DATA_SECTOR_SHIFT, ptrDst, CdlModeSpeed);
 
 		if (callback == NULL)
 		{
 			// Wait for all sectors to finish
-			readComplete = CdReadSync(0, (u8 *)0x0) < 1;
-		}
-
-		// If either command failed, or sync read did not finish, retry.
-		if ((uVar5 != 0) && (readComplete != 0))
-		{
-			break;
+			readComplete = CdReadSync(0, (u8 *)0x0) == 0;
 		}
 	}
 
@@ -429,35 +441,34 @@ void *LOAD_ReadFile_ex(struct BigHeader *bigfile, u32 loadType, int subfileIndex
 }
 
 // Used for XNF and only the XNF
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80032344-0x80032438
 void *LOAD_XnfFile(char *filename, void *ptrDestination, int *size)
 {
 	CdlFILE cdlFile;
+	u8 buf[8];
+	void *originalDst = ptrDestination;
 
 	LOAD_StringToUpper(filename);
 	CDSYS_SetMode_StreamData();
 
 	if (CdSearchFile(&cdlFile, filename) == 0)
 	{
-		return 0;
+		return ptrDestination;
 	}
 
 	*size = cdlFile.size;
 
-	int allocated = ptrDestination == NULL;
-	if (allocated)
+	if (ptrDestination == NULL)
 	{
 		// allocate room for all sectors,
 		// remove alignment before next Read
-		int sectorSize = (cdlFile.size + LOAD_CD_DATA_SECTOR_ROUND_MASK) & LOAD_CD_DATA_SECTOR_ALIGN_MASK;
-		ptrDestination = MEMPACK_AllocMem(sectorSize /*, fileName*/);
+		int sectorSize = ((cdlFile.size + LOAD_CD_DATA_SECTOR_ROUND_MASK) >> LOAD_CD_DATA_SECTOR_SHIFT) << LOAD_CD_DATA_SECTOR_SHIFT;
+		ptrDestination = MEMPACK_AllocMem(sectorSize, filename);
 		if (ptrDestination == NULL)
 		{
 			return NULL;
 		}
 	}
 
-	u8 buf[8];
 	CdControl(CdlSetloc, (u8 *)&cdlFile, buf);
 
 	if (CdRead((cdlFile.size + LOAD_CD_DATA_SECTOR_ROUND_MASK) >> LOAD_CD_DATA_SECTOR_SHIFT, ptrDestination, CdlModeSpeed) == 0)
@@ -470,7 +481,7 @@ void *LOAD_XnfFile(char *filename, void *ptrDestination, int *size)
 		return 0;
 	}
 
-	if (allocated)
+	if (originalDst == NULL)
 	{
 		MEMPACK_ReallocMem(cdlFile.size);
 	}
@@ -478,14 +489,9 @@ void *LOAD_XnfFile(char *filename, void *ptrDestination, int *size)
 	return ptrDestination;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80032438-0x80032498
 int LOAD_FindFile(char *filename, CdlFILE *cdlFile)
 {
-	if (filename == 0)
-	{
-		return 0;
-	}
-	if (cdlFile == 0)
+	if ((filename == 0) || (cdlFile == 0))
 	{
 		return 0;
 	}

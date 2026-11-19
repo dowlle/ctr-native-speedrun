@@ -1,12 +1,21 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80023a40-0x80023d4c
 u32 *DISPLAY_Blur_SubFunc(u32 *prim, struct DisplayBlurTile *tile)
 {
 	int srcX = tile->srcX;
 	int srcY = tile->srcY;
 	int srcW = tile->srcW;
 	int srcH = tile->srcH;
+	u32 u0;
+	u32 v0;
+	u32 u1;
+	u32 v1;
+	int dstX;
+	int dstY;
+	int dstW;
+	int dstH;
+	u32 tpage;
+	POLY_FT4 *poly;
 
 	if (((srcX + srcW) & -0x100) != (srcX & -0x100))
 	{
@@ -72,16 +81,16 @@ u32 *DISPLAY_Blur_SubFunc(u32 *prim, struct DisplayBlurTile *tile)
 		return prim;
 	}
 
-	u32 u0 = (u32)srcX & 0x3f;
-	u32 v0 = ((u32)srcY & 0xff) << 8;
-	u32 u1 = (u32)(srcW + (int)u0);
-	u32 v1 = v0 + ((u32)srcH << 8);
-	int dstX = tile->dstX;
-	int dstY = tile->dstY;
-	int dstW = tile->dstW;
-	int dstH = tile->dstH;
-	u32 tpage = getTPage(TEXPAGE_COLOR_15BIT, TRANS_50, (u32)srcX, (u32)srcY);
-	POLY_FT4 *poly = (POLY_FT4 *)prim;
+	u0 = (u32)srcX & 0x3f;
+	v0 = ((u32)srcY & 0xff) << 8;
+	u1 = (u32)(srcW + (int)u0);
+	v1 = v0 + ((u32)srcH << 8);
+	dstX = tile->dstX;
+	dstY = tile->dstY;
+	dstW = tile->dstW;
+	dstH = tile->dstH;
+	tpage = getTPage(TEXPAGE_COLOR_15BIT, TRANS_50, (u32)srcX, (u32)srcY);
+	poly = (POLY_FT4 *)prim;
 
 	CtrGpu_WritePackedUVWord(&poly->u0, u0 | v0);
 	CtrGpu_WritePackedXY(&poly->x0, CTR_PackS16Pair(dstX, dstY));
@@ -98,7 +107,6 @@ u32 *DISPLAY_Blur_SubFunc(u32 *prim, struct DisplayBlurTile *tile)
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80023d4c-0x80023ffc
 void DISPLAY_Blur_Main(struct PushBuffer *pb, int strength)
 {
 	struct GameTracker *gGT = sdata->gGT;
@@ -106,7 +114,7 @@ void DISPLAY_Blur_Main(struct PushBuffer *pb, int strength)
 	u32 *prim = backBuffer->primMem.cursor;
 	u32 *nextPrim;
 	s8 cameraID;
-	uint32_t *ot;
+	u32 *ot;
 
 	cameraID = *(s8 *)&pb->cameraID;
 
@@ -161,7 +169,7 @@ void DISPLAY_Blur_Main(struct PushBuffer *pb, int strength)
 
 		ot = gGT->otSwapchainDB[gGT->swapchainIndex];
 		oldTag = *ot;
-		*ot = (uint32_t)CtrGpu_PrimToOTLink24(prim);
+		*ot = (u32)CtrGpu_PrimToOTLink24(prim);
 
 		tile->dstX = pb->rect.x;
 		tile->dstY = pb->rect.y;
@@ -185,27 +193,20 @@ void DISPLAY_Blur_Main(struct PushBuffer *pb, int strength)
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80023ffc-0x8002406c.
 void DISPLAY_Swap(void)
 {
 	struct GameTracker *gGT;
 	struct DB *db;
 
-	gGT = sdata->gGT;
+	gGT = GAME_TRACKER;
 
-	// get pointer to the "new" frontBufferDB, which is current backBuffer
-	db = &gGT->db[gGT->swapchainIndex];
-
-	// flip swapchain index (0->1) (1->0)
+	// NOTE(aalhendi): The new render index selects the opposite DB as front.
+	// Resolve its published owner again after the display SDK call.
 	gGT->swapchainIndex = 1 - gGT->swapchainIndex;
-
-	// Set value of frontBuffer DB
+	db = &gGT->db[1] - gGT->swapchainIndex;
 	gGT->frontBuffer = db;
 
-	// frontBuffer->dispEnv
 	PutDispEnv(&db->dispEnv);
-
-	// frontBuffer
-	PutDrawEnv(&db->drawEnv);
+	PutDrawEnv(&GAME_TRACKER->frontBuffer->drawEnv);
 	return;
 }

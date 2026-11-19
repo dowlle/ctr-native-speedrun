@@ -1,6 +1,7 @@
 #include <platform/native_speedrun.h>
 
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +11,7 @@
 // Level identity of the main menu, used to detect a run reset.
 #define NATIVE_SPEEDRUN_MAIN_MENU_LEVEL 0x27
 
-internal u32 NativeSpeedrun_WallDelta(u64 now, u64 prev)
+static u32 NativeSpeedrun_WallDelta(u64 now, u64 prev)
 {
 	if (now <= prev)
 	{
@@ -26,7 +27,7 @@ internal u32 NativeSpeedrun_WallDelta(u64 now, u64 prev)
 	return (u32)delta;
 }
 
-internal void NativeSpeedrun_Emit(struct NativeSpeedrunState *state, u32 type, const struct NativeSpeedrunFrame *frame, s32 levelID, s32 segmentIndex)
+static void NativeSpeedrun_Emit(struct NativeSpeedrunState *state, u32 type, const struct NativeSpeedrunFrame *frame, s32 levelID, s32 segmentIndex)
 {
 	if (state->eventCount >= NATIVE_SPEEDRUN_MAX_FRAME_EVENTS)
 	{
@@ -73,7 +74,7 @@ void NativeSpeedrun_Reset(struct NativeSpeedrunState *state, const struct Native
 	}
 }
 
-internal void NativeSpeedrun_RestartRun(struct NativeSpeedrunState *state)
+static void NativeSpeedrun_RestartRun(struct NativeSpeedrunState *state)
 {
 	state->active = 0;
 	state->finished = 0;
@@ -245,7 +246,7 @@ void NativeSpeedrun_WriteSurface(const struct NativeSpeedrunState *state, struct
 	out->lastEventFinishPosition = state->lastEvent.finishPosition;
 }
 
-internal const char *NativeSpeedrun_EventTypeName(u32 type)
+static const char *NativeSpeedrun_EventTypeName(u32 type)
 {
 	switch (type)
 	{
@@ -304,7 +305,7 @@ int NativeSpeedrun_FormatEvent(const struct NativeSpeedrunState *state, const st
 	return written;
 }
 
-internal int NativeSpeedrun_ParseFail(char *err, u32 errSize, s32 lineNumber, const char *format, ...)
+static int NativeSpeedrun_ParseFail(char *err, u32 errSize, s32 lineNumber, const char *format, ...)
 {
 	if ((err != NULL) && (errSize != 0))
 	{
@@ -321,7 +322,7 @@ internal int NativeSpeedrun_ParseFail(char *err, u32 errSize, s32 lineNumber, co
 	return -1;
 }
 
-internal b32 NativeSpeedrun_KindFromToken(const char *token, s32 tokenLength, s32 *kindOut)
+static b32 NativeSpeedrun_KindFromToken(const char *token, s32 tokenLength, s32 *kindOut)
 {
 	if ((tokenLength == 6) && (strncmp(token, "normal", 6) == 0))
 	{

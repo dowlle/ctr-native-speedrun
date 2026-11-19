@@ -1,29 +1,27 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80028bbc-0x80028c78
 void SetReverbMode(u16 newReverbMode)
 {
-	if (newReverbMode < 5)
+	if (newReverbMode >= 5)
 	{
-		if (sdata->curReverb != newReverbMode)
+		if (sdata->curReverb != 5)
 		{
-			// update reverb setting if mode has changed
+			// disable reverb and reset mode to 5
 			SpuSetReverbModeDepth(0, 0);
-			SpuSetReverb(1);
-
-			SpuSetReverbModeParam(&data.reverbParams[newReverbMode]);
-
-			SpuSetReverbModeDepth(data.reverbParams[newReverbMode].depth.left, data.reverbParams[newReverbMode].depth.right);
-
-			sdata->curReverb = newReverbMode;
+			SpuSetReverb(0);
+			sdata->curReverb = 5;
+			// NOTE(aalhendi): Keep the mode write before the retail return jump.
+			CTR_PSX_MEMORY_BARRIER();
 		}
 		return;
 	}
-	else if (sdata->curReverb != 5)
+	else if (sdata->curReverb != newReverbMode)
 	{
-		// disable reverb and reset mode to 5
+		// update reverb setting if mode has changed
 		SpuSetReverbModeDepth(0, 0);
-		SpuSetReverb(0);
-		sdata->curReverb = 5;
+		SpuSetReverb(1);
+		SpuSetReverbModeParam(&GAME_HOWL_REVERB_PARAMS[newReverbMode]);
+		SpuSetReverbModeDepth(GAME_HOWL_REVERB_PARAMS[newReverbMode].depth.left, GAME_HOWL_REVERB_PARAMS[newReverbMode].depth.right);
+		sdata->curReverb = newReverbMode;
 	}
 }

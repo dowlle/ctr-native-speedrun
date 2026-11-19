@@ -1,27 +1,43 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003d4e4-0x8003d540.
 void MEMCARD_SetIcon(int icon)
 {
-	int *src;
-	int *dst;
+	register int *src CTR_PSX_REGISTER("$2");
+	register int *dst CTR_PSX_REGISTER("$3");
+	register int *srcEnd CTR_PSX_REGISTER("$4");
+	register u32 dstPage CTR_PSX_REGISTER("$2");
+	int word0;
+	int word1;
+	int word2;
+	int word3;
 
-	if ((icon & 0xffff) == 0)
+	// NOTE(aalhendi): Retail forms the hand-icon address from its 0x8008 page.
+	CTR_PSX_LOAD_SYMBOL_PAGE(dstPage, "data+19968");
+	dst = &CTR_PSX_PAGE_LVALUE(int, dstPage, 0x57a0, GAME_MEMCARD_ICON_HAND[0]);
+	if (((u32)icon << 16) != 0)
 	{
-		src = &data.memcardIcon_Ghost[0];
+		src = &GAME_MEMCARD_ICON_CRASH[0];
 	}
 	else
 	{
-		src = &data.memcardIcon_CrashHead[0];
+		src = &GAME_MEMCARD_ICON_GHOST[0];
 	}
 
-	dst = &data.memcardIcon_PsyqHand[0];
+	srcEnd = src + 0x40;
 
-	for (int i = 0; i < 0x40; i += 4)
+	do
 	{
-		dst[i + 0] = src[i + 0];
-		dst[i + 1] = src[i + 1];
-		dst[i + 2] = src[i + 2];
-		dst[i + 3] = src[i + 3];
-	}
+		word0 = src[0];
+		word1 = src[1];
+		word2 = src[2];
+		word3 = src[3];
+		dst[0] = word0;
+		dst[1] = word1;
+		dst[2] = word2;
+		dst[3] = word3;
+		// NOTE(aalhendi): Keep all four stores ahead of the source-pointer increment.
+		CTR_PSX_MEMORY_BARRIER();
+		src += 4;
+		dst += 4;
+	} while (src != srcEnd);
 }

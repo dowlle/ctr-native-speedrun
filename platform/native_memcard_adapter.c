@@ -46,7 +46,7 @@ void MEMCARD_GetFreeBytes(int slotIdx)
 	sdata->memoryCard_SizeRemaining = 0x1e000;
 }
 
-u8 MEMCARD_GetInfo(int slotIdx)
+s32 MEMCARD_GetInfo(int slotIdx)
 {
 	// NOTE(aalhendi): Native treats the host save directory as an inserted card;
 	// PSX updates free space while handling the async info event that native skips.
@@ -63,7 +63,7 @@ u8 MEMCARD_GetInfo(int slotIdx)
 	return MC_RETURN_IOE;
 }
 
-u8 MEMCARD_Format(int slotIdx)
+s32 MEMCARD_Format(int slotIdx)
 {
 	(void)slotIdx;
 	return MC_RETURN_IOE;
@@ -111,7 +111,7 @@ char *MEMCARD_FindNextGhost(void)
 	return &sdata->s_memcardFindGhostFile[0];
 }
 
-u8 MEMCARD_EraseFile(int slotIdx, char *srcString)
+s32 MEMCARD_EraseFile(int slotIdx, char *srcString)
 {
 	char nativeName[64];
 
@@ -127,16 +127,46 @@ int MEMCARD_HandleEvent(void)
 	return MC_RETURN_TIMEOUT;
 }
 
-u8 MEMCARD_Load(int slotIdx, char *name, u8 *ptrMemcard, int memcardFileSize, u32 loadFlags)
+// NOTE(aalhendi): Native keeps the card setup flow through its SDK shims;
+// retail selects the instruction-exact implementation in game_unity.h.
+void MEMCARD_InitCard(void)
+{
+	EnterCriticalSection();
+	sdata->SwCARD_EvSpIOE = OpenEvent(SwCARD, EvSpIOE, EvMdNOINTR, NULL);
+	sdata->SwCARD_EvSpERROR = OpenEvent(SwCARD, EvSpERROR, EvMdNOINTR, NULL);
+	sdata->SwCARD_EvSpTIMOUT = OpenEvent(SwCARD, EvSpTIMOUT, EvMdNOINTR, NULL);
+	sdata->SwCARD_EvSpNEW = OpenEvent(SwCARD, EvSpNEW, EvMdNOINTR, NULL);
+	sdata->HwCARD_EvSpIOE = OpenEvent(HwCARD, EvSpIOE, EvMdNOINTR, NULL);
+	sdata->HwCARD_EvSpERROR = OpenEvent(HwCARD, EvSpERROR, EvMdNOINTR, NULL);
+	sdata->HwCARD_EvSpTIMOUT = OpenEvent(HwCARD, EvSpTIMOUT, EvMdNOINTR, NULL);
+	sdata->HwCARD_EvSpNEW = OpenEvent(HwCARD, EvSpNEW, EvMdNOINTR, NULL);
+	EnableEvent(sdata->SwCARD_EvSpIOE);
+	EnableEvent(sdata->SwCARD_EvSpERROR);
+	EnableEvent(sdata->SwCARD_EvSpTIMOUT);
+	EnableEvent(sdata->SwCARD_EvSpNEW);
+	EnableEvent(sdata->HwCARD_EvSpIOE);
+	EnableEvent(sdata->HwCARD_EvSpERROR);
+	EnableEvent(sdata->HwCARD_EvSpTIMOUT);
+	EnableEvent(sdata->HwCARD_EvSpNEW);
+	ExitCriticalSection();
+
+	InitCARD(0);
+	StartCARD();
+	_bu_init();
+	// NOTE(aalhendi): Bit 0 makes the first successful card-info event enter
+	// the new-card path; with both bits 0 and 1 clear it is unformatted.
+	sdata->memcardStatusFlags = 1;
+}
+
+s32 MEMCARD_Load(int slotIdx, char *name, u8 *ptrMemcard, int memcardFileSize, u32 loadFlags)
 {
 	char nativeName[64];
-	enum NativeMemcardResult nativeResult;
 	int checksumResult;
 
 	(void)loadFlags;
 
 	MEMCARD_StringSet(nativeName, slotIdx, name);
-	nativeResult = NativeMemcard_ReadSaveData(nativeName, ptrMemcard, memcardFileSize, 0x100);
+	enum NativeMemcardResult nativeResult = NativeMemcard_ReadSaveData(nativeName, ptrMemcard, memcardFileSize, 0x100);
 	if (nativeResult == NATIVE_MEMCARD_NOT_FOUND)
 	{
 		return MC_RETURN_NODATA;
@@ -157,19 +187,17 @@ u8 MEMCARD_Load(int slotIdx, char *name, u8 *ptrMemcard, int memcardFileSize, u3
 	return checksumResult == MC_RETURN_IOE ? MC_RETURN_IOE : MC_RETURN_TIMEOUT;
 }
 
-u8 MEMCARD_Save(int slotIdx, char *name, char *icon, u8 *ptrMemcard, int memcardFileSize, u32 saveFlags)
+s32 MEMCARD_Save(int slotIdx, char *name, char *icon, u8 *ptrMemcard, int memcardFileSize, u32 saveFlags)
 {
 	char nativeName[64];
-	enum NativeMemcardResult nativeResult;
-	u8 *cardIcon;
 
 	sdata->crc16_checkpoint_byteIndex = 0;
 	sdata->crc16_checkpoint_status = 0;
 	MEMCARD_ChecksumSave(ptrMemcard, memcardFileSize);
 
-	cardIcon = MEMCARD_NativePrepareIcon(icon, memcardFileSize, saveFlags);
+	u8 *cardIcon = MEMCARD_NativePrepareIcon(icon, memcardFileSize, saveFlags);
 	MEMCARD_StringSet(nativeName, slotIdx, name);
-	nativeResult = NativeMemcard_WriteSaveData(nativeName, cardIcon, sdata->memcardIconSize, ptrMemcard, memcardFileSize);
+	enum NativeMemcardResult nativeResult = NativeMemcard_WriteSaveData(nativeName, cardIcon, sdata->memcardIconSize, ptrMemcard, memcardFileSize);
 	if (nativeResult == NATIVE_MEMCARD_OPEN_FAILED)
 	{
 		return MC_RETURN_FULL;

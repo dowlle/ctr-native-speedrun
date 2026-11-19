@@ -1,38 +1,45 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003db98-0x8003dbf8.
-int MEMCARD_NewTask(int slotIdx, char *name, u8 *ptrMemcard, int memcardFileSize, int unused)
+// NOTE(aalhendi): Matching bindings name canonical resident fields; native uses the live sdata pointer.
+#ifndef MEMCARD_FILEIO_STAGE
+#define MEMCARD_FILEIO_STAGE   sdata->memcard_stage
+#define MEMCARD_FILEIO_BUFFER  sdata->memcard_ptrStart
+#define MEMCARD_FILEIO_FD      sdata->memcard_fd
+#define MEMCARD_FILEIO_RETRIES sdata->memcard_remainingAttempts
+#define MEMCARD_FILEIO_SIZE    sdata->memcardFileSize
+#define MEMCARD_FILEIO_SLOT    sdata->memcardSlot
+#define MEMCARD_FILEIO_PATH    sdata->s_memcardFileCurr
+#endif
+
+int MEMCARD_NewTask(int slotIdx, char *name, u8 *ptrMemcard, int memcardFileSize)
 {
-	(void)unused;
-	sdata->memcardSlot = slotIdx;
+	MEMCARD_FILEIO_SLOT = slotIdx;
 
-	MEMCARD_StringSet(sdata->s_memcardFileCurr, slotIdx, name);
+	MEMCARD_StringSet(MEMCARD_FILEIO_PATH, slotIdx, name);
 
-	sdata->memcard_ptrStart = ptrMemcard;
-	sdata->memcard_remainingAttempts = 8;
-	sdata->memcardFileSize = memcardFileSize;
+	MEMCARD_FILEIO_BUFFER = ptrMemcard;
+	MEMCARD_FILEIO_RETRIES = 8;
+	MEMCARD_FILEIO_SIZE = memcardFileSize;
 
 	return 0;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003dbf8-0x8003dc30.
 void MEMCARD_CloseFile(void)
 {
-	int fd = sdata->memcard_fd;
+	int fd = MEMCARD_FILEIO_FD;
 
 	if (fd != -1)
 	{
 		close(fd);
-		sdata->memcard_fd = -1;
+		MEMCARD_FILEIO_FD = -1;
 	}
 
-	sdata->memcard_stage = MC_STAGE_IDLE;
+	MEMCARD_FILEIO_STAGE = MC_STAGE_IDLE;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003dc30-0x8003dc9c.
 int MEMCARD_ReadFile(int start_offset, int size)
 {
-	if ((lseek(sdata->memcard_fd, start_offset, 0) >= 0) && (read(sdata->memcard_fd, sdata->memcard_ptrStart, size) >= 0))
+	if (lseek(MEMCARD_FILEIO_FD, start_offset, 0) != -1 && read(MEMCARD_FILEIO_FD, MEMCARD_FILEIO_BUFFER, size) != -1)
 	{
 		// The read has started, the result will be found
 		// the next time we wait for an event result
@@ -43,10 +50,9 @@ int MEMCARD_ReadFile(int start_offset, int size)
 	return MC_RETURN_TIMEOUT;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003dc9c-0x8003dd10.
 u8 MEMCARD_WriteFile(int start_offset, const u8 *data, int size)
 {
-	if ((lseek(sdata->memcard_fd, start_offset, 0) >= 0) && (write(sdata->memcard_fd, data, size) >= 0))
+	if (lseek(MEMCARD_FILEIO_FD, start_offset, 0) != -1 && write(MEMCARD_FILEIO_FD, (void *)data, size) != -1)
 	{
 		// The write has started, the result will be found
 		// the next time we wait for an event result

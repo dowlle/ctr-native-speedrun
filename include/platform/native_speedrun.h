@@ -1,7 +1,7 @@
 #ifndef NATIVE_SPEEDRUN_H
 #define NATIVE_SPEEDRUN_H
 
-#include <macros.h>
+#include <ctr_types.h>
 
 // Pure speedrun state machine. It has no engine, platform or SDL dependency:
 // callers decode one engine frame into struct NativeSpeedrunFrame and read back

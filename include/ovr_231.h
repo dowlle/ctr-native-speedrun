@@ -2,19 +2,13 @@
 #define CTR_NATIVE_OVR_231_H
 
 
-// used all over 231,
-// Plant, FlameJet, etc
+// Input to LinkedCollide_Hitbox_Desc; callback arguments belong to the caller.
 struct HitboxDesc
 {
-	// check collision
 	struct Instance *inst;
 	struct Thread *thread;
 	struct Thread *bucket;
 	struct BoundingBox bbox;
-
-	// post collision
-	struct Thread *threadHit; // from bucket
-	void *funcThCollide;
 };
 
 struct MaskHeadScratch
@@ -60,10 +54,6 @@ enum
 	MASK_HEAD_ROT_WORLD_SPACE = 0x1,
 };
 
-CTR_STATIC_ASSERT(MASK_HEAD_DURATION_NORMAL == 0x1e00);
-CTR_STATIC_ASSERT(MASK_HEAD_DURATION_JUICED == 0x2d00);
-CTR_STATIC_ASSERT(MASK_HEAD_SCALE_NORMAL == 0x1000);
-CTR_STATIC_ASSERT(MASK_HEAD_ROT_WORLD_SPACE == 0x1);
 
 typedef u16 TrackerWeaponFlags;
 
@@ -82,7 +72,6 @@ enum
 	TRACKER_FLAG_WARPBALL_TARGET_REFRESH_BLOCKED = TRACKER_FLAG_WARPBALL_TARGET_PATH | TRACKER_FLAG_WARPBALL_BACKTRACKING,
 };
 
-CTR_STATIC_ASSERT(TRACKER_FLAG_WARPBALL_MASK_REPATH == 0x0010);
 
 // bomb, missile, warpball
 // yes, the bomb chases you and steers towards targets
@@ -158,18 +147,7 @@ struct TrackerWeapon
 	int timeAlive;
 
 	// 0x4c
-	union
-	{
-		struct
-		{
-			s16 savedPosX;
-			s16 savedPosY;
-		};
-		u32 savedPosXY;
-	};
-
-	// 0x50
-	s16 savedPosZ;
+	SVec3 savedPos;
 
 	// 0x52
 	s16 turnAroundFrames;
@@ -180,8 +158,7 @@ struct TrackerWeapon
 	// 0x58 bytes large
 };
 CTR_STATIC_ASSERT(offsetof(struct TrackerWeapon, pathProgress) == 0x2c);
-CTR_STATIC_ASSERT(offsetof(struct TrackerWeapon, savedPosXY) == 0x4c);
-CTR_STATIC_ASSERT(offsetof(struct TrackerWeapon, savedPosZ) == 0x50);
+CTR_STATIC_ASSERT(offsetof(struct TrackerWeapon, savedPos) == 0x4c);
 CTR_STATIC_ASSERT(sizeof(struct TrackerWeapon) == 0x58);
 
 struct RainLocal
@@ -271,18 +248,8 @@ struct MineWeapon;
 
 struct WeaponSlot231
 {
-	union
-	{
-		// 0x0
-		struct Item item;
-
-		struct
-		{
-			// 0x0
-			struct WeaponSlot231 *next;
-			struct WeaponSlot231 *prev;
-		};
-	};
+	// 0x0
+	struct Item item;
 
 	// 0x8
 	struct MineWeapon *mineWeapon;
@@ -393,7 +360,8 @@ CTR_STATIC_ASSERT(sizeof(struct Baron) == 0x30);
 
 struct Blade
 {
-	int angle;
+	s16 angle;
+	s16 padding;
 
 	// 0x4 bytes large
 };
@@ -541,10 +509,10 @@ CTR_STATIC_ASSERT(sizeof(struct FlameJet) == 0x14);
 
 struct Follower
 {
-	int frameCount;
+	s32 frameCount;
 	struct Driver *driver;
 	struct Thread *mineTh;
-	int backupTimesDestroyed;
+	s32 backupTimesDestroyed;
 
 	SVec3 realPos;
 	s16 _pad_realPos;
@@ -560,21 +528,20 @@ CTR_STATIC_ASSERT(sizeof(struct Fruit) == 0x4);
 struct Minecart
 {
 	// 0x0
-	// removed in decomp optimizations
 	SVec3 posStart;
 
 	// 0x6
 	s16 betweenPoints_currFrame;
 
 	// 0x8
-	// removed in decomp optimizations
 	SVec3 posEnd;
 
 	// 0xe
 	SVec3 dir;
 
 	// 0x14
-	int posIndex;
+	s16 posIndex;
+	s16 _pad_posIndex;
 
 	// 0x18
 	SVec3 rotCurr;
@@ -806,27 +773,52 @@ CTR_STATIC_ASSERT(offsetof(struct Turtle, turtleID) == 0x4);
 CTR_STATIC_ASSERT(offsetof(struct Turtle, state) == 0x8);
 CTR_STATIC_ASSERT(sizeof(struct Turtle) == 0xc);
 
+// INSTANCE_Birth copies 15 bytes, so the short names share contiguous storage.
+extern char rb_namePrefix[52];
+#define rb_nameNitro      (rb_namePrefix + 0)
+#define rb_nameTnt        (rb_namePrefix + 8)
+#define rb_nameShieldBomb (rb_namePrefix + 16)
+#define rb_nameCloud      (rb_namePrefix + 28)
+extern char rb_nameShatter[28];
+extern char rb_nameExplosion[28];
+extern char rb_nameBlowup[24];
+extern char rb_nameShockwave[28];
+extern char rb_nameBurstExplosion[28];
+
 struct OverlayRDATA_231
 {
 	// 0x800b2ae4
 	struct ParticleEmitter emSet_Missile[11];
 
+	// 0x800b2c70
+	u16 warpballParticleHeight[11];
+	u16 padding;
+
+	// 0x800b2c88
+	s16 warpballFadeScale[6][3];
+	s32 warpballFadeY[6];
+
 	// 0x800b2cc4
-	s16 maskPosArr[40];
+	s16 maskPosArr[24];
+	s16 shieldGrowScale[8][2];
+	s16 shieldPopScale[11][2];
+	s16 shieldPulseScale[6][2];
+
+	// 0x800b2d58
+	struct ParticleEmitter emSet_PotionShatter[9];
 };
 
 struct OverlayDATA_231
 {
-	// written by TheUbMunster, this may be wrong/have mistakes!
-
-	// 0x800b2eb4
-	struct WeaponSlot231 minePoolItem[40];
-
 	// 0x800b2e9c
 	struct LinkedList minePoolTaken;
 
 	// 0x800b2ea8
 	struct LinkedList minePoolFree;
+
+	// 0x800b2eb4
+	// NOTE(aalhendi): Retail reserves 50 slots but puts at most 40 on the free list.
+	struct WeaponSlot231 minePoolItem[50];
 };
 
 extern struct OverlayRDATA_231 R231;

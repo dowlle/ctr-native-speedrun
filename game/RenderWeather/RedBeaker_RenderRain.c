@@ -1,5 +1,7 @@
 #include <common.h>
 
+#ifdef CTR_NATIVE
+
 #define RED_BEAKER_CENTER_XY 0x02000080u
 #define RED_BEAKER_XY_MASK   0xfffeffffu
 #define RED_BEAKER_WRAP_MASK 0x01fe00ffu
@@ -19,12 +21,12 @@ CTR_STATIC_ASSERT(offsetof(LINE_G2, x1) == 0x10);
 
 static u32 RedBeaker_ReadWord(const void *base, int offset)
 {
-	return *(const u32 *)(const void *)((const char *)base + offset);
+	return CTR_ReadU32LE((const u8 *)base + offset);
 }
 
 static s16 RedBeaker_ReadS16(const void *base, int offset)
 {
-	return *(const s16 *)(const void *)((const char *)base + offset);
+	return CTR_ReadS16LE((const u8 *)base + offset);
 }
 
 static s8 RedBeaker_ReadS8(const void *base, int offset)
@@ -78,7 +80,7 @@ static int RedBeaker_IsVisible(u32 gteFlag, u32 sxy0, u32 sxy1, u32 screenBounds
 	return (s32)(bounds << 16) >= 0;
 }
 
-static void RedBeaker_EmitLine(u32 **primCursor, uint32_t *ot, u32 color)
+static void RedBeaker_EmitLine(u32 **primCursor, u32 *ot, u32 color)
 {
 	LINE_G2 *line = (LINE_G2 *)*primCursor;
 
@@ -86,21 +88,21 @@ static void RedBeaker_EmitLine(u32 **primCursor, uint32_t *ot, u32 color)
 	CtrGpu_WritePackedXY(&line->x0, MFC2(12));
 	CtrGpu_WriteColorCode(&line->r1, color);
 	CtrGpu_WritePackedXY(&line->x1, MFC2(13));
-	CtrGpu_LinkPacket24(ot, &line->tag, line, 0x04000000);
+	CtrGpu_LinkPacketFullOTTag(ot, &line->tag, line, 0x04000000);
 	*primCursor = (u32 *)(line + 1);
 }
 
-static void RedBeaker_EmitDrawMode(u32 **primCursor, uint32_t *ot, u32 drawMode)
+static void RedBeaker_EmitDrawMode(u32 **primCursor, u32 *ot, u32 drawMode)
 {
 	struct CtrGpuDrawModePacket *packet = (struct CtrGpuDrawModePacket *)*primCursor;
 
 	packet->drawMode = drawMode;
 	packet->terminator = 0;
-	CtrGpu_LinkPacket24(ot, &packet->tag, packet, 0x02000000);
+	CtrGpu_LinkPacketFullOTTag(ot, &packet->tag, packet, 0x02000000);
 	*primCursor = (u32 *)(packet + 1);
 }
 
-static void RedBeaker_RenderPass(u32 **primCursor, uint32_t *ot, u32 color, u32 drawMode, s32 frameCount, u32 scrollXY, u32 nextScrollXY, s32 scrollZ,
+static void RedBeaker_RenderPass(u32 **primCursor, u32 *ot, u32 color, u32 drawMode, s32 frameCount, u32 scrollXY, u32 nextScrollXY, s32 scrollZ,
                                  s32 nextScrollZ, u32 spanXY, s32 spanZ, u32 screenBounds)
 {
 	u32 state0 = 0x30125400;
@@ -168,24 +170,30 @@ static void RedBeaker_RenderPass(u32 **primCursor, uint32_t *ot, u32 color, u32 
 struct RedBeakerRainScratch
 {
 	u32 centerXY;
-	u8 pad_04[0x14];
+	u32 otBase;
+	u32 firstRain;
+	u8 pad_0c[0x0c];
 	u32 colorTop;
 	u32 colorBottom;
 };
 
 CTR_STATIC_ASSERT(offsetof(struct RedBeakerRainScratch, centerXY) == 0x00);
+CTR_STATIC_ASSERT(offsetof(struct RedBeakerRainScratch, otBase) == 0x04);
+CTR_STATIC_ASSERT(offsetof(struct RedBeakerRainScratch, firstRain) == 0x08);
 CTR_STATIC_ASSERT(offsetof(struct RedBeakerRainScratch, colorTop) == 0x18);
 CTR_STATIC_ASSERT(offsetof(struct RedBeakerRainScratch, colorBottom) == 0x1C);
+CTR_STATIC_ASSERT(sizeof(struct RedBeakerRainScratch) == 0x20);
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8006dc30-0x8006e26c
 void RedBeaker_RenderRain(struct PushBuffer *pb, struct PrimMem *primMem, struct JitPool *rain, u8 numPlyr, int gameMode1)
 {
 	u32 *prim = (u32 *)primMem->cursor;
 	struct RainLocal *firstRain = (struct RainLocal *)rain->taken.first;
 	struct RedBeakerRainScratch *scratch = CTR_SCRATCHPAD_PTR(struct RedBeakerRainScratch, 0x30);
 
-	// NOTE(aalhendi): PSX-backfeed blocker: retail saves/restores callee registers in scratchpad 0x00-0x2c and stores 32-bit pointer cursors at 0x34/0x38.
-	// Native C keeps pointer cursors as host-width locals; restore those exact scratchpad pointer stores before PSX backfeed.
+	// NOTE(aalhendi): Native uses its host ABI instead of scratchpad register
+	// saves, but retains the observed 32-bit pointer words. Retail's empty-list
+	// branch delay slot writes firstRain even when the pointer is NULL.
+	scratch->firstRain = (u32)firstRain;
 	if (firstRain == NULL)
 	{
 		primMem->cursor = prim;
@@ -200,7 +208,7 @@ void RedBeaker_RenderRain(struct PushBuffer *pb, struct PrimMem *primMem, struct
 	{
 		struct RainLocal *rainLocal;
 		u32 screenBounds;
-		uint32_t *otBase;
+		u32 *otBase;
 		int playerOffset;
 
 		CTC2(RedBeaker_ReadWord(&pb->matrix_ViewProj, 0x00), 0);
@@ -215,6 +223,7 @@ void RedBeaker_RenderRain(struct PushBuffer *pb, struct PrimMem *primMem, struct
 
 		screenBounds = RedBeaker_ReadWord(pb, 0x20);
 		otBase = pb->ptrOT;
+		scratch->otBase = (u32)otBase;
 		playerOffset = playerIndex * sizeof(struct InstDrawPerPlayer);
 
 		for (rainLocal = firstRain; rainLocal != NULL; rainLocal = rainLocal->next)
@@ -230,7 +239,7 @@ void RedBeaker_RenderRain(struct PushBuffer *pb, struct PrimMem *primMem, struct
 			u8 fade;
 			u8 top;
 			s32 otOffset;
-			uint32_t *ot;
+			u32 *ot;
 
 			if (rainLocal->cloudInst == NULL)
 			{
@@ -247,7 +256,9 @@ void RedBeaker_RenderRain(struct PushBuffer *pb, struct PrimMem *primMem, struct
 			if (gameMode1 == 0)
 			{
 				CTR_WriteU32LE(&rainLocal->scroll.x, nextScrollXY);
-				rainLocal->scroll.z = (s16)nextScrollZ;
+				// NOTE(aalhendi): Retail SW also writes the upper half into the
+				// scroll padding word; a narrowed SH leaves stale native bytes.
+				CTR_WriteU32LE(&rainLocal->scroll.z, (u32)nextScrollZ);
 			}
 
 			instBase = (char *)rainLocal->cloudInst + playerOffset;
@@ -289,7 +300,7 @@ void RedBeaker_RenderRain(struct PushBuffer *pb, struct PrimMem *primMem, struct
 				otOffset = 0xffc;
 			}
 
-			ot = (uint32_t *)(void *)((char *)otBase + otOffset);
+			ot = (u32 *)(void *)((char *)otBase + otOffset);
 
 			RedBeaker_RenderPass(&prim, ot, scratch->colorTop, 0xe1000a20, rainLocal->frameCount, scrollXY, nextScrollXY, scrollZ, nextScrollZ, velocityXY,
 			                     velocityZ, screenBounds);
@@ -300,3 +311,7 @@ void RedBeaker_RenderRain(struct PushBuffer *pb, struct PrimMem *primMem, struct
 
 	primMem->cursor = prim;
 }
+
+#else
+#include "RedBeaker_Retail.inc"
+#endif

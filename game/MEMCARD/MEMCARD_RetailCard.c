@@ -1,156 +1,293 @@
 #include <common.h>
+#include <psn00bsdk/include/sys/fcntl.h>
 
-// === This is bugged ===
-// People reported "Out of room" error screens
-// even though the memory card was not full
+// NOTE(aalhendi): Retail free-space accounting can report "Out of room"
+// before the card is full; preserve that behavior for byte-exact matching.
+// NOTE(aalhendi): GCC 2.8.1 forms gp-relative card-string addresses and
+// keeps the first directory-entry pointer in s0 before the initial test.
+// Retail uses absolute pages and delays that s0 assignment until the loop.
+// Native card accounting is selected from platform/native_memcard_adapter.c.
+__asm__(".section .MEMCARD_GetFreeBytes,\"ax\",@progbits\n"
+        ".align 2\n"
+        ".ent\tMEMCARD_GetFreeBytes\n"
+        ".set\tnoreorder\n"
+        ".globl MEMCARD_GetFreeBytes\n"
+        "MEMCARD_GetFreeBytes:\n"
+        "addiu $sp,$sp,-72\n"
+        "move $a1,$a0\n"
+        "sw $s0,56($sp)\n"
+        "lui $s0,0x800a\n"
+        "addiu $s0,$s0,-28508\n"
+        "move $a0,$s0\n"
+        "lui $a2,0x8009\n"
+        "addiu $a2,$a2,-11236\n"
+        "sw $ra,68($sp)\n"
+        "sw $s2,64($sp)\n"
+        "jal MEMCARD_StringSet\n"
+        "sw $s1,60($sp)\n"
+        "move $s1,$zero\n"
+        "move $a0,$s0\n"
+        "jal firstfile\n"
+        "addiu $a1,$sp,16\n"
+        "move $v1,$v0\n"
+        "addiu $v0,$sp,16\n"
+        "bne $v1,$v0,.LMemcardFreeDone\n"
+        "lui $v0,0x1\n"
+        "addiu $s2,$zero,-8192\n"
+        "move $s0,$v1\n"
+        ".LMemcardFreeLoop:\n"
+        "lw $v0,40($sp)\n"
+        "addiu $a0,$sp,16\n"
+        "addiu $v0,$v0,8191\n"
+        "and $v0,$v0,$s2\n"
+        "jal nextfile\n"
+        "addu $s1,$s1,$v0\n"
+        "beq $v0,$s0,.LMemcardFreeLoop\n"
+        "lui $v0,0x1\n"
+        ".LMemcardFreeDone:\n"
+        "ori $v0,$v0,0xe000\n"
+        "subu $v0,$v0,$s1\n"
+        "lw $ra,68($sp)\n"
+        "lw $s2,64($sp)\n"
+        "lw $s1,60($sp)\n"
+        "lw $s0,56($sp)\n"
+        "sw $v0,2368($gp)\n"
+        "jr $ra\n"
+        "addiu $sp,$sp,72\n"
+        ".end MEMCARD_GetFreeBytes\n"
+        ".set\treorder\n"
+        ".text\n");
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003dd10-0x8003ddac.
-void MEMCARD_GetFreeBytes(int slotIdx)
-{
-	struct DIRENTRY *firstEntry;
-	struct DIRENTRY entry;
+// NOTE(aalhendi): Retail loads the stage before its stack prologue and
+// holds the expected _card_info success value (1) in s1 while polling.
+// GCC 2.8.1 moves that initial load after the saved-register prologue.
+__asm__(".section .MEMCARD_GetInfo,\"ax\",@progbits\n"
+        ".align 2\n"
+        ".ent\tMEMCARD_GetInfo\n"
+        ".set\tnoreorder\n"
+        ".globl MEMCARD_GetInfo\n"
+        "MEMCARD_GetInfo:\n"
+        "lw $v0,1176($gp)\n"
+        "addiu $sp,$sp,-32\n"
+        "sw $s0,16($sp)\n"
+        "move $s0,$a0\n"
+        "sw $ra,24($sp)\n"
+        "beqz $v0,.LMemcardInfoStart\n"
+        "sw $s1,20($sp)\n"
+        "j .LMemcardInfoDone\n"
+        "addiu $v0,$zero,1\n"
+        ".LMemcardInfoStart:\n"
+        "jal MEMCARD_SkipEvents\n"
+        "addiu $s1,$zero,1\n"
+        "move $v0,$s1\n"
+        "sw $s0,2380($gp)\n"
+        "sw $v0,1176($gp)\n"
+        ".LMemcardInfoPoll:\n"
+        "jal _card_info\n"
+        "move $a0,$s0\n"
+        "bne $v0,$s1,.LMemcardInfoPoll\n"
+        "addiu $v0,$zero,8\n"
+        "sw $v0,1188($gp)\n"
+        "addiu $v0,$zero,7\n"
+        ".LMemcardInfoDone:\n"
+        "lw $ra,24($sp)\n"
+        "lw $s1,20($sp)\n"
+        "lw $s0,16($sp)\n"
+        "jr $ra\n"
+        "addiu $sp,$sp,32\n"
+        ".end MEMCARD_GetInfo\n"
+        ".set\treorder\n"
+        ".text\n");
+// NOTE(aalhendi): Retail checks the card stage before the stack prologue,
+// requires format() to return exactly 1, and stores the new stage before
+// calling MEMCARD_SkipEvents. GCC 2.8.1 moves the load and delay-slot store.
+__asm__(".section .MEMCARD_Format,\"ax\",@progbits\n"
+        ".align 2\n"
+        ".ent\tMEMCARD_Format\n"
+        ".set\tnoreorder\n"
+        ".globl MEMCARD_Format\n"
+        "MEMCARD_Format:\n"
+        "lw $v0,1176($gp)\n"
+        "addiu $sp,$sp,-24\n"
+        "sw $s0,16($sp)\n"
+        "move $s0,$a0\n"
+        "bnez $v0,.LMemcardFormatBusy\n"
+        "sw $ra,20($sp)\n"
+        "move $a0,$s0\n"
+        "jal MEMCARD_StringInit\n"
+        "move $a1,$zero\n"
+        "jal format\n"
+        "move $a0,$v0\n"
+        "addiu $v1,$zero,1\n"
+        "bne $v0,$v1,.LMemcardFormatDone\n"
+        "addiu $v0,$zero,1\n"
+        "addiu $v0,$zero,2\n"
+        "sw $s0,2380($gp)\n"
+        "sw $v0,1176($gp)\n"
+        "jal MEMCARD_SkipEvents\n"
+        "addiu $s0,$zero,1\n"
+        ".LMemcardFormatPoll:\n"
+        "lw $a0,2380($gp)\n"
+        "jal _card_load\n"
+        "nop\n"
+        "bne $v0,$s0,.LMemcardFormatPoll\n"
+        "addiu $v0,$zero,8\n"
+        "sw $v0,1188($gp)\n"
+        "j .LMemcardFormatDone\n"
+        "addiu $v0,$zero,7\n"
+        ".LMemcardFormatBusy:\n"
+        "addiu $v0,$zero,1\n"
+        ".LMemcardFormatDone:\n"
+        "lw $ra,20($sp)\n"
+        "lw $s0,16($sp)\n"
+        "jr $ra\n"
+        "addiu $sp,$sp,24\n"
+        ".end MEMCARD_Format\n"
+        ".set\treorder\n"
+        ".text\n");
 
-	int bytesUsedMemCard = 0;
-	MEMCARD_StringSet(sdata->s_memcardFileCurr, slotIdx, sdata->s_AnyFile);
-
-	// string for directory and file of save that is in use
-	firstEntry = firstfile(sdata->s_memcardFileCurr, &entry);
-
-	for (struct DIRENTRY *nxtEntry = &entry; firstEntry == nxtEntry; nxtEntry = nextfile(&entry))
-	{
-		bytesUsedMemCard += entry.size + 0x1fffU;
-		bytesUsedMemCard &= 0xffffe000;
-	}
-
-	sdata->memoryCard_SizeRemaining = 0x1e000 - bytesUsedMemCard;
-
-	return;
-}
-
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003e238-0x8003e29c.
-u8 MEMCARD_GetInfo(int slotIdx)
-{
-	if (sdata->memcard_stage != MC_STAGE_IDLE)
-		return MC_RETURN_TIMEOUT;
-
-	// discard any previous events
-	// submit a card_info request,
-	// check the result of a GET INFO
-	// 8 tries to see if it worked
-	MEMCARD_SkipEvents();
-	sdata->memcard_stage = MC_STAGE_GETINFO;
-	sdata->memcardSlot = slotIdx;
-	while (!_card_info(slotIdx))
-		;
-	sdata->memcard_remainingAttempts = 8;
-
-	// The "info" has started, the result will be found
-	// the next time we wait for an event result
-	return MC_RETURN_PENDING;
-}
-
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003e51c-0x8003e59c.
-u8 MEMCARD_Format(int slotIdx)
-{
-	if (sdata->memcard_stage != MC_STAGE_IDLE)
-		return MC_RETURN_TIMEOUT;
-
-	if (!format(MEMCARD_StringInit(slotIdx, 0)))
-		return MC_RETURN_TIMEOUT;
-
-	// discard any previous events
-	// submit a load to make sure format worked,
-	// check the result of a NEW CARD
-	// 8 tries to see if it worked
-	sdata->memcardSlot = slotIdx;
-	sdata->memcard_stage = MC_STAGE_NEWCARD;
-	MEMCARD_SkipEvents();
-	while (_card_load(sdata->memcardSlot) != 1)
-		;
-	sdata->memcard_remainingAttempts = 8;
-
-	// The "format" has started, the result will be found
-	// the next time we wait for an event result
-	return MC_RETURN_PENDING;
-}
-
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003e59c-0x8003e600.
 int MEMCARD_IsFile(int slotIdx, char *save_name)
 {
 	char name[64];
+	int fd;
+	register int invalidFd CTR_PSX_REGISTER("$16");
 
 	MEMCARD_StringSet(name, slotIdx, save_name);
 
-	int fd;
-
 	fd = open(name, FASYNC | FWRITE);
+	// NOTE(aalhendi): Retail loads -1, stores the descriptor, then branches on the result.
+	CTR_PSX_LOAD_IMMEDIATE(invalidFd, -1);
 	sdata->memcard_fd = fd;
+	CTR_PSX_MEMORY_BARRIER();
 
-	if (fd != -1)
-	{
-		close(fd);
-		sdata->memcard_fd = -1;
-		return MC_RETURN_IOE;
-	}
+	if (fd == invalidFd)
+		return MC_RETURN_NODATA;
 
-	return MC_RETURN_NODATA;
+	close(fd);
+	sdata->memcard_fd = invalidFd;
+	return MC_RETURN_IOE;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003e600-0x8003e678.
-char *MEMCARD_FindFirstGhost(int slotIdx, char *srcString)
-{
-	if (sdata->memcard_stage != MC_STAGE_IDLE)
-	{
-		return 0;
-	}
+// NOTE(aalhendi): Retail accepts firstfile() only when it returns the supplied
+// DIRENTRY buffer, then stores the ghost filename at its absolute address.
+__asm__(".section .MEMCARD_FindFirstGhost,\"ax\",@progbits\n"
+        ".align 2\n"
+        ".ent\tMEMCARD_FindFirstGhost\n"
+        ".set\tnoreorder\n"
+        ".globl MEMCARD_FindFirstGhost\n"
+        "MEMCARD_FindFirstGhost:\n"
+        "addiu $sp,$sp,-64\n"
+        "move $v1,$a0\n"
+        "lw $v0,1176($gp)\n"
+        "move $a2,$a1\n"
+        "sw $ra,60($sp)\n"
+        "bnez $v0,.LMemcardFirstGhostNone\n"
+        "sw $s0,56($sp)\n"
+        "lui $v0,0x800a\n"
+        "addiu $s0,$v0,-28508\n"
+        "move $a0,$s0\n"
+        "jal MEMCARD_StringSet\n"
+        "move $a1,$v1\n"
+        "move $a0,$s0\n"
+        "jal firstfile\n"
+        "addiu $a1,$sp,16\n"
+        "move $a1,$v0\n"
+        "addiu $v0,$sp,16\n"
+        "bne $a1,$v0,.LMemcardFirstGhostNone\n"
+        "addiu $v0,$zero,15\n"
+        "sw $v0,1176($gp)\n"
+        "addiu $s0,$s0,32\n"
+        "jal strcpy\n"
+        "move $a0,$s0\n"
+        "j .LMemcardFirstGhostDone\n"
+        "move $v0,$s0\n"
+        ".LMemcardFirstGhostNone:\n"
+        "move $v0,$zero\n"
+        ".LMemcardFirstGhostDone:\n"
+        "lw $ra,60($sp)\n"
+        "lw $s0,56($sp)\n"
+        "jr $ra\n"
+        "addiu $sp,$sp,64\n"
+        ".end MEMCARD_FindFirstGhost\n"
+        ".set\treorder\n"
+        ".text\n");
 
-	struct DIRENTRY *firstEntry;
-	struct DIRENTRY someEntry;
-	MEMCARD_StringSet(sdata->s_memcardFileCurr, slotIdx, srcString);
+// NOTE(aalhendi): nextfile() uses the same returned-buffer contract; a
+// different pointer ends ghost enumeration and restores the idle stage.
+__asm__(".section .MEMCARD_FindNextGhost,\"ax\",@progbits\n"
+        ".align 2\n"
+        ".ent\tMEMCARD_FindNextGhost\n"
+        ".set\tnoreorder\n"
+        ".globl MEMCARD_FindNextGhost\n"
+        "MEMCARD_FindNextGhost:\n"
+        "addiu $sp,$sp,-64\n"
+        "lw $v1,1176($gp)\n"
+        "addiu $v0,$zero,15\n"
+        "sw $ra,60($sp)\n"
+        "bne $v1,$v0,.LMemcardNextGhostNone\n"
+        "sw $s0,56($sp)\n"
+        "jal nextfile\n"
+        "addiu $a0,$sp,16\n"
+        "move $a1,$v0\n"
+        "addiu $v0,$sp,16\n"
+        "bne $a1,$v0,.LMemcardNextGhostEnd\n"
+        "lui $s0,0x800a\n"
+        "addiu $s0,$s0,-28476\n"
+        "jal strcpy\n"
+        "move $a0,$s0\n"
+        "j .LMemcardNextGhostDone\n"
+        "move $v0,$s0\n"
+        ".LMemcardNextGhostEnd:\n"
+        "sw $zero,1176($gp)\n"
+        ".LMemcardNextGhostNone:\n"
+        "move $v0,$zero\n"
+        ".LMemcardNextGhostDone:\n"
+        "lw $ra,60($sp)\n"
+        "lw $s0,56($sp)\n"
+        "jr $ra\n"
+        "addiu $sp,$sp,64\n"
+        ".end MEMCARD_FindNextGhost\n"
+        ".set\treorder\n"
+        ".text\n");
 
-	firstEntry = firstfile(sdata->s_memcardFileCurr, &someEntry);
-	if (firstEntry == 0)
-		return 0;
-
-	sdata->memcard_stage = MC_STAGE_GHOST_FOUND;
-	strcpy(&sdata->s_memcardFindGhostFile[0], &firstEntry->name[0]);
-	return &sdata->s_memcardFindGhostFile[0];
-}
-
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003e678-0x8003e6d4.
-char *MEMCARD_FindNextGhost(void)
-{
-	if (sdata->memcard_stage != MC_STAGE_GHOST_FOUND)
-	{
-		return 0;
-	}
-
-	struct DIRENTRY *nextEntry;
-	struct DIRENTRY someEntry;
-
-	nextEntry = nextfile(&someEntry);
-	if (nextEntry == 0)
-	{
-		sdata->memcard_stage = MC_STAGE_IDLE;
-		return 0;
-	}
-
-	strcpy(&sdata->s_memcardFindGhostFile[0], &someEntry.name[0]);
-	return &sdata->s_memcardFindGhostFile[0];
-}
-
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003e6d4-0x8003e740.
-// called by MC_ACTION_Erase
-u8 MEMCARD_EraseFile(int slotIdx, char *srcString)
-{
-	if (sdata->memcard_stage != 0)
-		return MC_RETURN_TIMEOUT;
-
-	char name[64];
-	MEMCARD_StringSet(name, slotIdx, srcString);
-
-	sdata->memcard_stage = (erase(name)) ? MC_STAGE_ERASE_PASS : MC_STAGE_ERASE_FAIL;
-
-	MEMCARD_GetFreeBytes(slotIdx);
-	return MC_RETURN_PENDING;
-}
+// NOTE(aalhendi): Erase enters the pass stage before the SDK call and changes
+// to the fail stage unless erase() returns exactly 1, then updates free space.
+__asm__(".section .MEMCARD_EraseFile,\"ax\",@progbits\n"
+        ".align 2\n"
+        ".ent\tMEMCARD_EraseFile\n"
+        ".set\tnoreorder\n"
+        ".globl MEMCARD_EraseFile\n"
+        "MEMCARD_EraseFile:\n"
+        "addiu $sp,$sp,-88\n"
+        "sw $s0,80($sp)\n"
+        "move $s0,$a0\n"
+        "lw $v0,1176($gp)\n"
+        "move $a2,$a1\n"
+        "beqz $v0,.LMemcardEraseStart\n"
+        "sw $ra,84($sp)\n"
+        "j .LMemcardEraseDone\n"
+        "addiu $v0,$zero,1\n"
+        ".LMemcardEraseStart:\n"
+        "addiu $a0,$sp,16\n"
+        "jal MEMCARD_StringSet\n"
+        "move $a1,$s0\n"
+        "addiu $v0,$zero,14\n"
+        "sw $v0,1176($gp)\n"
+        "jal erase\n"
+        "addiu $a0,$sp,16\n"
+        "addiu $v1,$zero,1\n"
+        "beq $v0,$v1,.LMemcardEraseFreeBytes\n"
+        "addiu $v0,$zero,13\n"
+        "sw $v0,1176($gp)\n"
+        ".LMemcardEraseFreeBytes:\n"
+        "jal MEMCARD_GetFreeBytes\n"
+        "move $a0,$s0\n"
+        "addiu $v0,$zero,7\n"
+        ".LMemcardEraseDone:\n"
+        "lw $ra,84($sp)\n"
+        "lw $s0,80($sp)\n"
+        "jr $ra\n"
+        "addiu $sp,$sp,88\n"
+        ".end MEMCARD_EraseFile\n"
+        ".set\treorder\n"
+        ".text\n");

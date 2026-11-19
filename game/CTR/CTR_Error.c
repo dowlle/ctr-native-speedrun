@@ -1,40 +1,36 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80021c94-0x80021da0.
 void CTR_ErrorScreen(u8 r, u8 g, u8 b)
 {
 	TILE p;
 	int i;
 
-	for (i = 0; i < 3; i++)
+#ifdef CTR_NATIVE
+	// NOTE(aalhendi): Native tag helpers read the prior length byte before setlen overwrites it.
+	p.tag = 0;
+#endif
+
+	for (i = 0; i < 2; i++)
 	{
 		DrawSync(0);
 		VSync(0);
 		DISPLAY_Swap();
 
-		// save a little asm
-		if (i == 2)
-		{
-			return;
-		}
-
-		// prim code = 0 (cause bitshifted),
-		// with bit-flag parameter '2'
 		p.code = 2;
-
-		// len = 03, addr = 0xffffff,
-		// this is the first, and last, primitive
-		p.tag = 0x3ffffff;
-
-		p.x0 = sdata->gGT->frontBuffer->drawEnv.clip.x;
-		p.y0 = sdata->gGT->frontBuffer->drawEnv.clip.y;
-		p.w = sdata->gGT->frontBuffer->drawEnv.clip.w;
-		p.h = sdata->gGT->frontBuffer->drawEnv.clip.h;
+		termPrim(&p);
+		setlen(&p, 3);
 
 		p.r0 = r;
 		p.g0 = g;
 		p.b0 = b;
+		p.w = GAME_TRACKER->frontBuffer->drawEnv.clip.w;
+		p.h = GAME_TRACKER->frontBuffer->drawEnv.clip.h;
+		p.x0 = GAME_TRACKER->frontBuffer->drawEnv.clip.x;
+		p.y0 = GAME_TRACKER->frontBuffer->drawEnv.clip.y;
 
 		DrawOTag(&p);
 	}
+	DrawSync(0);
+	VSync(0);
+	DISPLAY_Swap();
 }

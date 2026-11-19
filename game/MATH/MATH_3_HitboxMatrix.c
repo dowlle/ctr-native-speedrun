@@ -1,7 +1,6 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003d264-0x8003d328.
-MATRIX *MATH_HitboxMatrix(MATRIX *output, MATRIX *input)
+void MATH_HitboxMatrix(MATRIX *output, MATRIX *input)
 {
 	u32 *in = (u32 *)input;
 	u32 *out = (u32 *)output;
@@ -10,7 +9,7 @@ MATRIX *MATH_HitboxMatrix(MATRIX *output, MATRIX *input)
 	u32 r13r21 = (in[3] & 0xffff) | (in[0] & 0xffff0000);
 	u32 r22r23 = (in[2] & 0xffff) | (in[3] & 0xffff0000);
 	u32 r31r32 = (in[1] & 0xffff) | (in[2] & 0xffff0000);
-	s16 r33 = *(s16 *)&in[4];
+	s32 r33 = input->m[2][2];
 
 	CTC2(r11r12, 0);
 	CTC2(r13r21, 1);
@@ -20,6 +19,7 @@ MATRIX *MATH_HitboxMatrix(MATRIX *output, MATRIX *input)
 
 	MTC2(((0u - (u32)input->t[0]) & 0xffff) | ((0u - (u32)input->t[1]) << 16), 0);
 	MTC2(0u - (u32)input->t[2], 1);
+	CTR_GteLoadDelay();
 	gte_rtv0();
 
 	out[0] = r11r12;
@@ -27,7 +27,6 @@ MATRIX *MATH_HitboxMatrix(MATRIX *output, MATRIX *input)
 	out[2] = r22r23;
 	out[3] = r31r32;
 	*(s16 *)&out[4] = r33;
-	CTR_GteStoreMAC(output->t);
-
-	return output;
+	// NOTE(aalhendi): Retail stores MAC1-3 directly; MFC2 and CPU stores change the instruction stream.
+	CTR_PSX_STORE_COP2_VEC3(output->t, 25, 26, 27);
 }

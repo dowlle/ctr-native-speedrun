@@ -1,7 +1,8 @@
 #ifndef CTR_NATIVE_NAMESPACE_LIST_H
 #define CTR_NATIVE_NAMESPACE_LIST_H
 
-struct Item
+// NOTE(aalhendi): Pool objects also use this two-pointer prefix as their intrusive list link.
+struct CTR_MAY_ALIAS Item
 {
 	// 0x0
 	struct Item *next;
