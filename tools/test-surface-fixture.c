@@ -14,7 +14,13 @@
 #define SLEEP_MS(ms) usleep((useconds_t)((ms) * 1000))
 #endif
 
-__attribute__((section(".ctrsr"), used)) struct NativeSpeedrunSurface g_fixture_surface;
+#if defined(_MSC_VER)
+#pragma section(".ctrsr", read, write)
+__declspec(allocate(".ctrsr"))
+#else
+__attribute__((section(".ctrsr"), used))
+#endif
+struct NativeSpeedrunSurface g_fixture_surface = {0};
 
 static FILE *g_out;
 

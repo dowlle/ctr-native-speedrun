@@ -12,7 +12,7 @@
 #define CHEAT_O BTN_CIRCLE
 #define CHEAT_X BTN_CROSS_one
 
-struct OverlayDATA_230 D230 =
+struct OverlayDATA_230 D230 CTR_PSX_MATCH_SECTION(".D230") =
     {
         // MAIN MENU CONSTS
 
@@ -223,30 +223,36 @@ struct OverlayDATA_230 D230 =
                 {.modelID = 0x6b, .animStartFrame = 0xd7, .unusedMenuReadyFrame = TITLE_INTRO_MENU_READY_FRAME, .isTrophy = 0},
             },
 
-        .titleCameraPos = {{0x32, 0xFFE2, 0x64}},
-        .titleCameraRot = {{0, 0xFF9C, 0}},
+        .titleCameraPos = {0x32, 0xFFE2, 0x64},
+        .titleCameraRot = {0, 0xFF9C, 0},
 
-        .titleMenuTransitionDurationFrames = 0xC,
-        .titleMenuTransitionStep = 8,
-
-        .titleMainMenuPos = {{0x180, 0x6c}},
-        .titleAdventureMenuPos = {{0, 0}},
-        .titleRaceTypeMenuPos = {{0, 0}},
-        .titlePlayersMenuPos = {{0, 0}},
-        .titleDifficultyMenuPos = {{0, 0}},
-
-        .titleBaseCameraPos = {{0x32, 0xFFE2, 0x64}},
-
-        .transitionMeta_Menu =
+        .titleTransition =
             {
-                {512, 0, 0, 0, 0},
-                {0, 0, 1, 0, 0},
-                {0, 0, 1, 0, 0},
-                {0, 0, 2, 0, 0},
-                {0, 0, 3, 0, 0},
-                {0x4B0, 0xFFE2, 0, 0, 0},
-                {0x64, 0xC8, 0, 0, 0},
-                {0, 0, -1, 0, 0},
+                .durationFrames = 0xC,
+                .step = 8,
+                .menuLayout =
+                    {
+                        .menuPos =
+                            {
+                                {0x180, 0x6c},
+                                {0, 0},
+                                {0, 0},
+                                {0, 0},
+                                {0, 0},
+                            },
+                        .baseCameraPos = {0x32, 0xFFE2, 0x64},
+                    },
+                .transition =
+                    {
+                        {512, 0, 0, 0, 0},
+                        {0, 0, 1, 0, 0},
+                        {0, 0, 1, 0, 0},
+                        {0, 0, 2, 0, 0},
+                        {0, 0, 3, 0, 0},
+                        {0x4B0, 0xFFE2, 0, 0, 0},
+                        {0x64, 0xC8, 0, 0, 0},
+                        {0, 0, -1, 0, 0},
+                    },
             },
 
         .titleSounds =
@@ -529,8 +535,8 @@ struct OverlayDATA_230 D230 =
 
         .characterSelectDriverModel =
             {
-                .pos = {{0, 0x28, 0xFA}},
-                .rot = {{0x800, 0, 0}},
+                .pos = {0, 0x28, 0xFA},
+                .rot = {0x800, 0, 0},
                 .moveFrames = 4,
                 .slideDistance = 0x8C,
             },
@@ -541,11 +547,11 @@ struct OverlayDATA_230 D230 =
 
         .characterSelectFallbackDirection2 = {3, 3, 0, 0},
 
-        .characterSelect_Outline = {.self = 0},
+        .characterSelect_Outline = COLOR_CODE_PACKED_INIT(0),
 
-        .characterSelect_NeutralColor = {.self = 0x808080},
+        .characterSelect_NeutralColor = COLOR_CODE_PACKED_INIT(0x808080),
 
-        .characterSelect_ChosenColor = {.self = 0},
+        .characterSelect_ChosenColor = COLOR_CODE_PACKED_INIT(0),
 
         .characterSelect_BlueRectColors = {0x1b, 0x6a, 0xcb, 0x00, 0x9b, 0xd2, 0xf2, 0x40, 0xb7, 0xe1, 0xed, 0x43,
                                            0x65, 0x4b, 0x03, 0x46, 0xa6, 0x83, 0x23, 0x50, 0xdf, 0xc8, 0x95, 0x64},
@@ -610,7 +616,7 @@ struct OverlayDATA_230 D230 =
                 {24, 0x4b, 0xFFFF, 0x4, 0x1f8, 0x19a},
             },
 
-        .transitionMeta_trackSel = {{-512, 0, 1, 0, 0}, {0, -200, 2, 0, 0}, {0, 200, 3, 0, 0}, {512, 0, 4, 0, 0}, {0, 0, -1, 0, 0}},
+        .trackTransitions = {{{-512, 0, 1, 0, 0}, {0, -200, 2, 0, 0}, {0, 200, 3, 0, 0}, {512, 0, 4, 0, 0}, {0, 0, -1, 0, 0}}},
 
         .lapCountByRow = {{3, 0}, {5, 0}, {7, 0}, {0, 0}},
 
@@ -627,7 +633,7 @@ struct OverlayDATA_230 D230 =
                 .rows = &D230.rowsLapSel[0],
             },
 
-        .videoCol = {.self = 0x808080},
+        .videoCol = COLOR_CODE_PACKED_INIT(0x808080),
 
         .timeTrialStars =
             {
@@ -654,7 +660,7 @@ struct OverlayDATA_230 D230 =
                     },
             },
 
-        .cupSel_Color = {.self = 0xC0C0C0},
+        .cupSel_Color = COLOR_CODE_PACKED_INIT(0xC0C0C0),
 
         // BATTLE CONSTS
 
@@ -742,9 +748,9 @@ struct OverlayDATA_230 D230 =
                 .pointLimitValues = {5, 10, 15},
             },
 
-        .battleWeaponEnabledColor = {.self = 0x808080},
-        .battleWeaponDisabledColor = {.self = 0x101010},
-        .battleWeaponPanelColor = {.self = 0x806050},
+        .battleWeaponEnabledColor = COLOR_CODE_PACKED_INIT(0x808080),
+        .battleWeaponDisabledColor = COLOR_CODE_PACKED_INIT(0x101010),
+        .battleWeaponPanelColor = COLOR_CODE_PACKED_INIT(0x806050),
 
         // HIGH SCORE CONSTS
 
@@ -768,7 +774,7 @@ struct OverlayDATA_230 D230 =
                 .beatenFlagBit = {0x1, 0x2},
             },
 
-        .highscore_iconColor = {.self = 0x808080},
+        .highscore_iconColor = COLOR_CODE_PACKED_INIT(0x808080),
 
         .rowsHighScore = {{0xAF, 0, 1, 0, 0}, {0xB1, 0, 2, 0, 0}, {0xB2, 1, 2, 0, 0}, {RECTMENU_STRING_NONE}},
 
@@ -857,9 +863,13 @@ struct OverlayDATA_230 D230 =
         .highScoreTransition =
             {
                 .state = ENTERING_MENU,
-                .frame = {0, 0, 0},
-                .horizontalMove = {0, 0},
-                .verticalMove = {0, 0},
+                .mainFrame = 0,
+                .trackFrame = 0,
+                .rowFrame = 0,
+                .activeHorizontalMove = 0,
+                .pendingHorizontalMove = 0,
+                .activeVerticalMove = 0,
+                .pendingVerticalMove = 0,
             },
 
         // SCRAPBOOK

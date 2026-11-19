@@ -55,7 +55,7 @@ enum Buttons
 struct GamepadButtonMap
 {
 	// 0x0
-	u8 rawInput[4];
+	u32 rawInput;
 
 	// 0x4
 	u32 buttons;
@@ -67,38 +67,22 @@ enum Plug
 	PLUGGED = 0
 };
 
-struct __attribute__((packed)) ControllerPacket
+struct ControllerPacket
 {
 	// 0x0
 	u8 plugged;
 
 	// 0x1
-	// single byte that you can access as either a pair of nibbles or a whole integer
-	union
-	{
-		struct
-		{
-			u8 payloadLength : 4;  // Payload length / 2, 0 for multitap
-			u8 controllerType : 4; // Device type (PadTypeID)
-		};
-		u8 controllerData;
-	};
+	u8 controllerData;
 
 	// 0x2
-	// Button states, see RawInput enum
-	// set up us a union because like 1 function needs the s16 to be accessed as two separate bytes
-	union
+	struct
 	{
-		struct
-		{
-			u8 controllerInput1;
-			u8 controllerInput2;
-		};
-		u16 controllerInput;
-	};
+		u8 high;
+		u8 low;
+	} input;
 
 	// 0x4
-	// union size: 4 bytes
 	union
 	{
 		struct
@@ -119,51 +103,39 @@ struct __attribute__((packed)) ControllerPacket
 		} neGcon;
 		struct
 		{
-			u16 jog_rot; // Jog rotation
+			s16 jog_rot; // Jog rotation
 		} jogcon;
 		struct
 		{
 			u16 gun_x; // Gun X position in dotclocks
 			u16 gun_y; // Gun Y position in scanlines
 		} guncon;
-	};
-
-	// 8 bytes
+	} payload;
 };
 
-struct __attribute__((packed)) MultitapPacket
+struct MultitapPacket
 {
-	union
-	{
-		struct
-		{
-			// 0x0
-			// see ControllerPacket
-			u8 plugged;
+	// 0x0
+	u8 plugged;
 
-			// 0x1
-			// ditto
-			union
-			{
-				struct
-				{
-					u8 payloadLength : 4;
-					u8 controllerType : 4;
-				};
-				u8 controllerData;
-			};
+	// 0x1
+	u8 controllerData;
 
-			// 0x2
-			struct ControllerPacket controllers[4];
-		};
-		struct ControllerPacket controller;
-	};
+	// 0x2
+	struct ControllerPacket controllers[4];
+};
 
-	// 34 bytes
+// NOTE(aalhendi): A physical port contains either a single-pad packet or a
+// multitap header followed by four packets. Both views share the two-byte header.
+union GamepadSlot
+{
+	struct ControllerPacket controller;
+	struct MultitapPacket multitap;
 };
 
 CTR_STATIC_ASSERT(sizeof(struct ControllerPacket) == 8);
 CTR_STATIC_ASSERT(sizeof(struct MultitapPacket) == 34);
+CTR_STATIC_ASSERT(sizeof(union GamepadSlot) == 34);
 
 struct GamepadBuffer
 {
@@ -176,7 +148,7 @@ struct GamepadBuffer
 	// FF for right
 
 	// 2
-	s16 unk_1;
+	s16 previousAnalogLeftY;
 
 	// 4
 	s16 stickLX;
@@ -185,10 +157,10 @@ struct GamepadBuffer
 	s16 stickLY;
 
 	// 8
-	s16 stickLX_dontUse1;
+	s16 inputStickLX;
 
 	// A
-	s16 stickLY_dontUse1;
+	s16 inputStickLY;
 
 	// C
 	s16 stickRX;
@@ -250,16 +222,16 @@ struct GamepadBuffer
 
 	// ==== JogCon ====
 
-	u8 unk42;
-	u8 unk43;
+	u8 jogRequestedForce;
+	u8 jogWheelLimitForce;
 
 	// 0x44
-	u8 unk44; // 2A
-	u8 unk45; // 2A
+	u8 jogCenteringFrames;
+	u8 jogEffectCommand;
 
-	// elapsedTim timers
-	s16 unk46; // vib1 2A
-	s16 unk48; // vib2 2A
+	// JogCon effect duration and force override timer, in milliseconds.
+	s16 jogEffectTimeMS;
+	s16 jogForceOverrideTimeMS;
 
 	s16 padding;
 
@@ -275,10 +247,6 @@ struct GamepadSystem
 	// 0x280
 	s16 unk;
 
-// no clue if this is right, but it fixes Sep3 padding for now,
-// the only important part of the struct is the gamepad[8] anyway,
-// I should come back to investigate Sep3 GamepadSystem later
-#if BUILD >= UsaRetail
 	// 0x282
 	char unkE[0xE];
 
@@ -299,51 +267,26 @@ struct GamepadSystem
 	// 2C4
 	int unk_2C4;
 	int unk_2C8;
-#endif
 
 	int unk_2CC;
 
-	// gamepad subsystem, for use with InitPAD()/StartPAD() BIOS functions
-	// array of two 34-byte elements
-	// 2 bytes for meta (whether or not it's a pad or multitap)
-	// 8 bytes per gamepad port in multitap (4*8 = 32)
-	/*
-	struct
-	{
-	    char meta[2];
-	    struct
-	    {
-	        char data[8];
-	    } padBuffer[4];
-	} slotBuffer[2];
-	*/
+	// Two physical ports, each holding one pad or four multitap pads.
+	union GamepadSlot slotBuffer[2];
 
-	struct MultitapPacket slotBuffer[2];
-
-	// 0x2cc -- Sep3, which is 0x314 - 64 - 8
-	// 0x314 -- all others
+	// 0x314
 	int numGamepadsConnected;
 
 	// 0x318
 	u32 gamepadsConnectedByFlag;
 
-// 0x31C
-// end of gamepad system
-
-// Eur and Japan
-#if BUILD >= EurRetail
 	// 0x31C
-	// GAMEPAD_GetNumConnected:
-	// 1 by default, becomes 0 after
-	// finding a multitap in gamepad slot[0]
-	int unk_multitap_detected;
-#endif
+	// end of gamepad system
 };
 
 struct RacingWheelData
 {
 	// 0x0
-	u16 gamepadCenter;
+	s16 gamepadCenter;
 
 	// 0x2
 	s16 deadZone;
@@ -354,13 +297,7 @@ struct RacingWheelData
 
 CTR_STATIC_ASSERT(sizeof(struct GamepadBuffer) == 0x50);
 CTR_STATIC_ASSERT(sizeof(struct GamepadButtonMap) == 0x8);
-#if BUILD <= SepReview
-CTR_STATIC_ASSERT(sizeof(struct GamepadSystem) == 0x2D4);
-#elif BUILD < EurRetail
 CTR_STATIC_ASSERT(sizeof(struct GamepadSystem) == 0x31C);
-#else
-CTR_STATIC_ASSERT(sizeof(struct GamepadSystem) == 0x320);
-#endif
 CTR_STATIC_ASSERT(sizeof(struct RacingWheelData) == 6);
 
 #endif

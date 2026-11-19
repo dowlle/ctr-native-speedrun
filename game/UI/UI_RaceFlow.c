@@ -26,81 +26,14 @@ enum UIRaceFlowConstants
 	UI_RACE_START_DIVIDER_HEIGHT = 2,
 	UI_RACE_START_BAR_HEIGHT = 0x1e,
 	UI_RACE_START_BAR_ALPHA_MASK = 0xff000000,
-	UI_RACE_END_DRIVER_COUNT = 8,
-	UI_RACE_END_AVG_SPEED_SCALE = 100,
-	UI_RACE_END_MIN_MISSILES_FOR_RATIO = 4,
-	UI_RACE_END_ATTACK_RATIO_SHIFT = 0xc,
-	UI_RACE_END_ATTACK_RATIO_INVALID = -1,
-	UI_RACE_END_FIRST_PLACE_RANK = 0,
 	UI_RACE_END_MIN_SPLITSCREEN_MENU_PLAYERS = 3,
 	UI_RACE_END_INITIAL_ICON_COUNT = 1,
 	UI_RACE_END_SAVE_GHOST_FRAME = 0x3f9,
 };
 
-CTR_STATIC_ASSERT(UI_RACE_END_OPTION_QUIT == 3);
-CTR_STATIC_ASSERT(UI_RACE_END_OPTION_PRESS_TO_CONTINUE == 0xc9);
-CTR_STATIC_ASSERT(UI_RACE_START_TITLE_CENTER_X == 0x100);
-CTR_STATIC_ASSERT(UI_RACE_START_BAR_HEIGHT == 0x1e);
-CTR_STATIC_ASSERT(UI_RACE_END_DRIVER_COUNT == 8);
-CTR_STATIC_ASSERT(UI_RACE_END_ATTACK_RATIO_SHIFT == 0xc);
-CTR_STATIC_ASSERT(UI_RACE_END_SAVE_GHOST_FRAME == 0x3f9);
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8005572c-0x80055840.
-void UI_RaceEnd_GetDriverClock(struct Driver *driver)
-{
-	u8 missilesLaunched;
-	int scaledDistance;
-	int timeElapsed;
-	int attacksReceived;
+#include "UI_RaceEndClock.c"
 
-	if ((driver->actionsFlagSet & ACTION_RACE_TIMER_FROZEN) == 0)
-	{
-		timeElapsed = driver->timeElapsedInRace;
-		driver->actionsFlagSet |= ACTION_RACE_TIMER_FROZEN;
-
-		if (timeElapsed != 0)
-		{
-			// get average speed over time
-			scaledDistance = driver->distanceDriven * UI_RACE_END_AVG_SPEED_SCALE;
-			driver->distanceDriven = scaledDistance / timeElapsed;
-		}
-
-		// if missiles launched is less than 4
-		if (driver->numTimesMissileLaunched < UI_RACE_END_MIN_MISSILES_FOR_RATIO)
-		{
-			driver->NumMissilesComparedToNumAttacks = UI_RACE_END_ATTACK_RATIO_INVALID;
-		}
-
-		// if missiles launched is more than 4
-		else
-		{
-			// number of missiles launched
-			missilesLaunched = driver->numTimesMissileLaunched;
-
-			// compare number of missiles to number of attacks
-			driver->NumMissilesComparedToNumAttacks = (int)((driver->numTimesAttacking << UI_RACE_END_ATTACK_RATIO_SHIFT) / missilesLaunched);
-		}
-
-		attacksReceived = 0;
-
-		// count number of times you were attacked in race
-		for (int i = 0; i < UI_RACE_END_DRIVER_COUNT; i++)
-		{
-			attacksReceived += driver->numTimesAttackedByPlayer[i];
-		}
-
-		driver->numTimesAttacked = attacksReceived;
-
-		// if driver is in first place
-		if (driver->driverRank == UI_RACE_END_FIRST_PLACE_RANK)
-		{
-			// duplicate amount of time spent in last place
-			driver->TimeWinningDriverSpentLastPlace = driver->timeSpentInLastPlace;
-		}
-	}
-}
-
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80055840-0x80055c90.
 
 // You see this in 1P mode, right before traffic lights count down
 void UI_RaceStart_IntroText1P(void)
@@ -311,34 +244,33 @@ LAB_80055930:
 		rect.y = gGT->pushBuffer[0].rect.y - (barTransition - UI_RACE_START_DIVIDER_TOP_Y_OFFSET);
 
 		Color color;
-		color.self = colors[0];
+		ColorCode_SetPacked(&color, colors[0]);
 
-		uint32_t *ot = gGT->backBuffer->otMem.uiOT;
+		u32 *ot = gGT->backBuffer->otMem.uiOT;
 
-		CTR_Box_DrawSolidBox(&rect, color, ot);
+		CTR_Box_DrawSolidBox(&rect, &color, ot, &gGT->backBuffer->primMem);
 
 		// Draw tiny rectangle near big black title bar (second)
 		rect.y = gGT->pushBuffer[0].rect.y + gGT->pushBuffer[0].rect.h + barTransition + UI_RACE_START_DIVIDER_BOTTOM_Y_OFFSET;
-		CTR_Box_DrawSolidBox(&rect, color, ot);
+		CTR_Box_DrawSolidBox(&rect, &color, ot, &gGT->backBuffer->primMem);
 
 		// 30-pixel height
 		// clear RGB, keep alpha (which is zero anyway)
 		colors[0] = colors[0] & UI_RACE_START_BAR_ALPHA_MASK;
-		color.self = colors[0];
+		ColorCode_SetPacked(&color, colors[0]);
 		rect.h = UI_RACE_START_BAR_HEIGHT;
 
 		// draw big black title bar (first)
 		rect.y = gGT->pushBuffer[0].rect.y - barTransition;
-		CTR_Box_DrawSolidBox(&rect, color, ot);
+		CTR_Box_DrawSolidBox(&rect, &color, ot, &gGT->backBuffer->primMem);
 
 		// draw big black title bar (second)
 		rect.y = gGT->pushBuffer[0].rect.y + gGT->pushBuffer[0].rect.h + barTransition + UI_RACE_START_DIVIDER_BOTTOM_Y_OFFSET;
-		CTR_Box_DrawSolidBox(&rect, color, ot);
+		CTR_Box_DrawSolidBox(&rect, &color, ot, &gGT->backBuffer->primMem);
 	}
 	return;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80055c90-0x8005607c.
 void UI_RaceEnd_MenuProc(struct RectMenu *menu)
 {
 	s16 option;
@@ -418,7 +350,6 @@ void UI_RaceEnd_MenuProc(struct RectMenu *menu)
 		// clear backup,
 		// keep music,
 		// destroy "most" fx, let menu fx play to end
-		// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80055df0-0x80055e04 for retry stop-audio args.
 		howl_StopAudio(1, 0, 0);
 
 		// if did not improve time, then dont
@@ -473,7 +404,7 @@ void UI_RaceEnd_MenuProc(struct RectMenu *menu)
 		SelectProfile_ToggleMode(SELECT_PROFILE_MODE_GHOST_SAVE);
 
 		// Change active Menu to GhostSelection
-		sdata->ptrActiveMenu = &data.menuGhostSelection;
+		sdata->ptrDesiredMenu = &data.menuGhostSelection;
 		break;
 	}
 
@@ -482,6 +413,8 @@ void UI_RaceEnd_MenuProc(struct RectMenu *menu)
 	{
 		// go to battle setup screen
 		sdata->mainMenuState = MAIN_MENU_BATTLE_SETUP;
+
+		sdata->Loading.OnBegin.AddBitsConfig0 |= MAIN_MENU;
 
 		// load LEV of main menu
 		MainRaceTrack_RequestLoad(MAIN_MENU_LEVEL);

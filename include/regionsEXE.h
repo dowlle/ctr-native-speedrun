@@ -7,31 +7,22 @@ enum
 	MATRIX_ND_BAKED_MATRIX_OFFSET = 0x8,
 };
 
-// NOTE(aalhendi): Retail stores vehicle animation data as 0x20-byte packed
-// entries. VehPhysForce also reads a MATRIX at entry+0x8, intentionally
-// overlapping this entry and the next stride.
 struct MatrixND
 {
-	union
-	{
-		struct
-		{
-			SVec3Slot bakedOffset;
-			SVec3Slot authoredRot;
-			SVec3Slot authoredScale;
-			s32 authoredPad[2];
-		};
-
-		struct
-		{
-			s16 m[3][3];
-			s16 extraShort;
-			int t[3];
-		};
-
-		MATRIX matrix;
-	};
+	s16 m[3][3];
+	s16 extraShort;
+	int t[3];
 };
+
+// NOTE(aalhendi): Retail stores vehicle animation source values in the same
+// 0x20-byte words later consumed as overlapping matrices.
+typedef struct CTR_MAY_ALIAS MatrixNDAuthored
+{
+	SVec3Slot bakedOffset;
+	SVec3Slot authoredRot;
+	SVec3Slot authoredScale;
+	s32 authoredPad[2];
+} MatrixNDAuthored;
 
 typedef struct CTR_MAY_ALIAS MatrixNDOverlapMatrix
 {
@@ -41,10 +32,21 @@ typedef struct CTR_MAY_ALIAS MatrixNDOverlapMatrix
 
 CTR_STATIC_ASSERT(sizeof(MatrixNDOverlapMatrix) == sizeof(MATRIX));
 
-force_inline MatrixNDOverlapMatrix *MatrixND_GetOverlapMatrix(struct MatrixND *matrix)
+static inline MatrixNDOverlapMatrix *MatrixND_GetOverlapMatrix(struct MatrixND *matrix)
 {
 	return (MatrixNDOverlapMatrix *)((u8 *)matrix + MATRIX_ND_BAKED_MATRIX_OFFSET);
 }
+
+static inline MatrixNDAuthored *MatrixND_GetAuthored(struct MatrixND *matrix)
+{
+	return (MatrixNDAuthored *)matrix;
+}
+
+struct BakedGteMatrixTable
+{
+	struct MatrixND *physEntry;
+	s32 numEntries;
+};
 
 enum
 {
@@ -61,22 +63,11 @@ enum
 };
 
 CTR_STATIC_ASSERT(sizeof(struct MatrixND) == 0x20);
-CTR_STATIC_ASSERT(offsetof(struct MatrixND, bakedOffset) == 0x0);
-CTR_STATIC_ASSERT(offsetof(struct MatrixND, authoredRot) == 0x8);
-CTR_STATIC_ASSERT(offsetof(struct MatrixND, authoredScale) == 0x10);
-CTR_STATIC_ASSERT(MATRIX_ND_BAKED_MATRIX_OFFSET == offsetof(struct MatrixND, m[1][1]));
-CTR_STATIC_ASSERT(MATRIX_ND_BAKED_MATRIX_OFFSET == offsetof(struct MatrixND, authoredRot));
-CTR_STATIC_ASSERT(offsetof(struct MatrixND, matrix) == 0x0);
-CTR_STATIC_ASSERT(BAKED_GTE_MATRIX_NONE == 0);
-CTR_STATIC_ASSERT(BAKED_GTE_MATRIX_WHEELIE_START == 1);
-CTR_STATIC_ASSERT(BAKED_GTE_MATRIX_WHEELIE_HOLD == 2);
-CTR_STATIC_ASSERT(BAKED_GTE_MATRIX_WHEELIE_RECOVER == 3);
-CTR_STATIC_ASSERT(BAKED_GTE_MATRIX_CRASH_FALL == 4);
-CTR_STATIC_ASSERT(BAKED_GTE_MATRIX_SQUISH_RECOVER == 5);
-CTR_STATIC_ASSERT(BAKED_GTE_MATRIX_BLASTED == 6);
-CTR_STATIC_ASSERT(BAKED_GTE_MATRIX_JUMP_BASE == 7);
-CTR_STATIC_ASSERT(BAKED_GTE_MATRIX_JUMP_OXIDE == 7);
-CTR_STATIC_ASSERT(BAKED_GTE_MATRIX_COUNT == 0x14);
+CTR_STATIC_ASSERT(sizeof(MatrixNDAuthored) == 0x20);
+CTR_STATIC_ASSERT(offsetof(MatrixNDAuthored, bakedOffset) == 0x0);
+CTR_STATIC_ASSERT(offsetof(MatrixNDAuthored, authoredRot) == 0x8);
+CTR_STATIC_ASSERT(offsetof(MatrixNDAuthored, authoredScale) == 0x10);
+CTR_STATIC_ASSERT(MATRIX_ND_BAKED_MATRIX_OFFSET == offsetof(MatrixNDAuthored, authoredRot));
 
 struct SoundFadeInput
 {
@@ -125,6 +116,18 @@ enum
 	TERRAIN_BOT_FLAG_DECEL_TO_TARGET_SPEED = 0x80,
 };
 typedef u16 TerrainBotFlags;
+
+union TerrainBotData
+{
+	u16 raw[4];
+	struct
+	{
+		u16 unk_0x34_0;
+		TerrainBotFlags speedFlags;
+		s16 targetSpeedScale;
+		s16 accelerationScale;
+	} fields;
+};
 
 struct Scrub
 {
@@ -198,17 +201,7 @@ struct Terrain
 	s16 sound;
 
 	// 0x34
-	union
-	{
-		u16 unk_0x34[4];
-		struct
-		{
-			u16 unk_0x34_0;
-			TerrainBotFlags botSpeedFlags;
-			s16 botTargetSpeedScale;
-			s16 botAccelerationScale;
-		};
-	};
+	union TerrainBotData bot;
 
 	// 0x3C
 	// BOTS-only speed decay scale; 0x100 is neutral.
@@ -239,7 +232,8 @@ struct MetaDataLEV
 	// lng index of level,
 	// "Gem Stone Valley", "N Sanity Beach", etc,
 	// that is, if it exists for this LEV
-	int name_LNG;
+	s16 name_LNG;
+	s16 padding_0xa;
 
 	// 0xC
 	// this is the amount of time you need
@@ -264,7 +258,6 @@ struct MetaDataLEV
 	s16 characterID_Boss;
 
 	// 0x16
-	// Used in Aug14 prototype
 	// N Tropy calls it "Speed Champion"
 	s16 characterID_Champion;
 };
@@ -346,11 +339,13 @@ struct MetaDataCHAR
 
 	// 8
 	// index in ptrIcons
-	int iconID;
+	s16 iconID;
+
+	// 0xA
+	s16 padding_0xa;
 
 	// 0xC
-	// Can be 0,1,2,3,(4 for max, in pal)
-	// changes engine sound
+	// Can be 0, 1, 2, or 3; changes engine sound
 	int engineID;
 };
 
@@ -358,26 +353,7 @@ struct MetaDataCHAR
 // which is 0x800 bytes into the EXE file
 struct rData
 {
-#if (BUILD == JpnTrial) || (BUILD == JpnRetail)
-
 	// 80010000
-	char Antichip_jumpPointers[0x50];
-
-	// 80010050
-	char Antichip_msgEng[0x54];
-
-	// 800100A4
-	char Antichip_msgJpn[0x3C];
-
-	// 800100E0
-	char Antichip_dataRedSign[0x10];
-
-#endif
-
-	// 80010000 -- UsaRetail
-	// 800100F0 -- JpnTrial
-	// 80010000 -- EurRetail
-	// 800100F0 -- JpnRetail
 	char s_asphalt2_thisAppearsTwice[0xC];
 
 	// 8001000C
@@ -1076,10 +1052,8 @@ struct rData
 	// 800110e0
 	void *jumpPointers3[0x25]; // 0x94 bytes
 
-#if (BUILD != JpnTrial) && (BUILD != JpnRetail)
 	// 80011174
 	char s_lang_buffer[0xC];
-#endif
 
 	// 80011180
 	struct
@@ -1123,9 +1097,6 @@ struct rData
 	// 80011284
 	char s_lightgreenon[0x20];
 
-#if (BUILD == JpnTrial) || (BUILD == JpnRetail)
-	int randomExtraIntRDATA; // why does this happen?
-#endif
 
 	// 800112a4
 	void *LOAD_TenStages_jumpPointers4[0x10];
@@ -1224,9 +1195,6 @@ struct rData
 	// 80011478
 	char s_PathTo_Bigfile[0x14];
 
-#if BUILD == JpnRetail
-	char s_PathTo_BanJ_EXE[0x1C];
-#endif
 
 	// 8001148C
 	void *jumpPointers5[0x65];
@@ -1256,15 +1224,19 @@ struct rData
 	// for 7 lap races up to 99:59:99
 	char s_timeString_empty[0xc];
 
-#if BUILD >= EurRetail
-	char unkJumpPointers_afterTimeString[0x20];
-#endif
 
 	// 800116e0
 	char s_lapString[0xc];
 
 	// 800116ec
-	char rdata54[0x54];
+	struct UI_VsWaitRdata uiVsWait;
+
+	// 80011708
+	char uiRaceFormatStorage[0x10];
+
+	// 80011718
+	// Compiler-owned UI_VsQuipAssignAll dispatch table.
+	char uiVsQuipDispatchStorage[0x28];
 
 	// 80011740
 	char s_oxide[0x18];
@@ -1382,11 +1354,20 @@ struct Difficulty
 // Last PsyQ function?
 // 80080990 FlushCache
 
-// 8007EB90 -- SepReview
-// 800809a0 -- UsaRetail
-// 8007FA04 -- JpnTrial
-// 80080ED4 -- EurRetail
-// 80083D14 -- JpnRetail
+struct AdventureCup
+{
+	s16 lngIndex_CupName;
+	// color of gem and token in portals
+	s16 color[3];
+};
+
+struct RaceWheelConfigOption
+{
+	s16 lngIndex;
+	s16 previewAngle;
+	s16 inputValue;
+};
+
 struct Data
 {
 	// 800809a0
@@ -1397,11 +1378,7 @@ struct Data
 	// 6 boss races
 	struct Difficulty BossDifficulty[6];
 
-	// 8007f0d0 -- SepReview
-	// 80080ee0 -- UsaRetail
-	// 8007ff44 -- JpnTrial
-	// 80081414 -- EurRetail
-	// 80084254 -- JpnRetail
+	// 80080ee0
 	s16 advDifficulty[0xC];
 
 	// --------------------------
@@ -1409,11 +1386,7 @@ struct Data
 	// Spawn index (0-7) for player index (0-7)
 	// for all types of game modes in CTR
 
-	// 8007f0e8 -- SepReview
-	// 80080ef8 -- UsaRetail
-	// 8007ff5c -- JpnTrial
-	// 8008142c -- EurRetail
-	// 8008426c -- JpnRetail
+	// 80080ef8
 	struct
 	{
 		// 80080ef8 (different with no in-game effect)
@@ -1446,11 +1419,7 @@ struct Data
 
 	} kartSpawnOrder;
 
-	// 8007f120 -- SepReview
-	// 80080F30 -- UsaRetail
-	// 8007ff94 -- JpnTrial
-	// 80081464 -- EurRetail
-	// 800842A4 -- JpnRetail
+	// 80080F30
 	s16 botsThrottle[0xC];
 
 	// 80080F48
@@ -1466,31 +1435,19 @@ struct Data
 	// end of race camera
 	s16 EndOfRace_Camera_Size[0x12];
 
-	// 8007f1c4 -- SepReview
-	// 80080fd4 -- UsaRetail
-	// 80080038 -- JpnTrial
-	// 80081508 -- EurRetail
-	// 80084348 -- JpnRetail
+	// 80080fd4
 	int Spin360_heightOffset_cameraPos[5];
 
 	// 80080fe8 from LookAt
 	int Spin360_heightOffset_driverPos[5];
 
-	// 8007f1EC -- SepReview
-	// 80080FFC -- UsaRetail
-	// 80080060 -- JpnTrial
-	// 80081530 -- EurRetail
-	// 80084370 -- JpnRetail
+	// 80080FFC
 	char s_XA_ENG_XNF[0x10];
 	char s_XA_MUSIC[0x14];
 	char s_XA_ENG_EXTRA[0x18];
 	char s_XA_ENG_GAME[0x18];
 
-	// 8007f240 -- SepReview
-	// 80081050 -- UsaRetail
-	// 800800B4 -- JpnTrial
-	// 80081584 -- EurRetail
-	// 800843C4 -- JpnRetail
+	// 80081050
 
 	// Might only be 7, but 8th
 	// is always zero, and the
@@ -1500,26 +1457,12 @@ struct Data
 	// 80081070
 	struct AudioMeta audioMeta[3];
 
-// June 1999 - 0x5a
-// EuroDemo, Jpn D26, both Spyro2 - 0x5c
-#if BUILD == AugReview
-#define NUM_MDM 0xaf // Aug 4, Aug 14?
-#elif BUILD == SepReview
-#define NUM_MDM 0xde
-#elif BUILD >= UsaRetail
 #define NUM_MDM 0xe2
-#else
-#error Unknown MDM
-#endif
 
 	// 80081088
 	struct MetaDataMODEL MetaDataModels[NUM_MDM];
 
-	// 8007fce0 -- SepReview
-	// 80081B20 -- UsaRetail
-	// 80080b84 -- JpnTrial
-	// 80082054 -- EurRetail
-	// 80084e94 -- JpnRetail
+	// 80081B20
 	void *ptrRenderedQuadblockDestination_forEachPlayer[4];
 
 	// the quadblock destination is in the 80096404 region
@@ -1527,167 +1470,58 @@ struct Data
 	// 80081B30
 	void *ptrRenderedQuadblockDestination_again[4];
 
-	// 8007FD00 -- SepReview
-	// 80081B40 -- UsaRetail
-	// 80080BA4 -- JpnTrial
-	// 80082074 -- EurRetail
-	// 80084EB4 -- JpnRetail
+	// 80081B40
 	// 0x230 bytes of colors
 	u32 colors[NUM_COLORS][4];
 
-	// 8007ff00 -- SepReview	0x20
-	// 80081D70 -- UsaRetail	0x23
-	// 80080dd4 -- JpnTrial		0x23
-	// 800822a4 -- EurRetail	0x23
-	// 800850e4 -- JpnRetail	0x23
+	// 80081D70
 	u32 *ptrColor[NUM_COLORS];
 
-// 8007FF80 -- SepReview
-// 80081dfc -- UsaRetail
-// 80080E60 -- JpnTrial
-// 80082330 -- EurRetail
-// 80085170 -- JpnRetail
-#if BUILD == SepReview
-	u16 ghostScrambleData[0x2ae + 0x42];
-#elif BUILD == UsaRetail
+	// 80081dfc
 	u16 ghostScrambleData[0x2ae];
-#elif BUILD == JpnTrial
-	u16 ghostScrambleData[0x2ae];
-#elif BUILD == EurRetail
-	u16 ghostScrambleData[0x2ae + 6];
-#elif BUILD == JpnRetail
-	u16 ghostScrambleData[0x2ae + 6];
-#endif
 
-	// 80082358 -- UsaRetail
-	// 800813bc -- JpnTrial
-	// 800856d8 -- JpnRetail
+	// 80082358
 	s16 font_IconGroupID[FONT_NUM];
 
-	// 80080568 -- SepReview
-	// 80082360 -- UsaRetail
-	// 800813c4 -- JpnTrial
-	// 800828a0 -- EurRetail
-	// 800856e0 -- JpnRetail
+	// 80082360
 	s16 font_charPixWidth[FONT_NUM];
 
-#if BUILD >= UsaRetail
-	// 80082368 -- UsaRetail
-	// 800813cc -- JpnTrial
-	// 800828a8 -- EurRetail
-	// 800856e8 -- JpnRetail
+	// 80082368
 	s16 font_charPixHeight[FONT_NUM];
-#endif
 
-	// 80082370 -- UsaRetail
-	// 800813d4 -- JpnTrial
-	// 800828b0 -- EurRetail
-	// 800856f0 -- JpnRetail
+	// 80082370
 	// punctuation, like period and colon
 	s16 font_puncPixWidth[FONT_NUM];
 
-// 80080578 -- SepReview
-// 80082378 -- UsaRetail
-// 800813dc -- JpnTrial
-// 800828b8 -- EurRetail
-// 800856f8 -- JpnRetail
-// contains the icon IDs of each ASCII character
-// US builds include array spaces for Japanese characters (0x5F onwards)
-#if BUILD != EurRetail
+	// 80082378
+	// Contains the icon IDs of each ASCII character and reserved kana slots.
 	u8 font_characterIconID[0xE0];
-#else
-	// Europe build trims the array down to 0x60
-	u8 font_characterIconID[0x60];
-#endif
 
-	// 80080658 -- SepReview
-	// 80082458 -- UsaRetail
-	// 800814bc -- JpnTrial
-	// 80082918 -- EurRetail
-	// 800857d8 -- JpnRetail
+	// 80082458
 	s16 font_buttonScale[FONT_NUM];
 
-	// 80080660 -- SepReview
-	// 80082460 -- UsaRetail
-	// 800814c4 -- JpnTrial
-	// 800857e0 -- JpnRetail
+	// 80082460
 	// added to character width, when using buttons
 	s16 font_buttonPixWidth[FONT_NUM];
 
-	// 80080668 -- SepReview
-	// 80082468 -- UsaRetail
-	// 800814cc -- JpnTrial
-	// 80082928 -- EurRetail
-	// 800857e8 -- JpnRetail
+	// 80082468
 	s16 font_buttonPixHeight[FONT_NUM];
 
-	// 80080670 -- SepReview
-	// 80082470 -- UsaRetail
-	// 800814d4 -- JpnTrial
-	// 80082930 -- EurRetail
-	// 800857f0 -- JpnRetail
+	// 80082470
 	char font_indentIconID[FONT_NUM * 2];
 
-	// 80080678 -- SepReview
-	// 80082478 -- UsaRetail
-	// 800814dc -- JpnTrial
-	// 80082938 -- EurRetail
-	// 800857f8 -- JpnRetail
+	// 80082478
 	// 0x8 is debug width, 0xA is debug height, 0xC is small width, 0xE is small height, so on
-	s16 font_indentPixDimensions
-#if BUILD == SepReview
-	    [(FONT_NUM - 1) * 2]; // Naughty Dog typo
-#elif BUILD >= UsaRetail
-	    [FONT_NUM * 2];
-#endif
+	s16 font_indentPixDimensions[FONT_NUM * 2];
 
-// 800814ec -- JpnTrial
-// 80085808 -- JpnRetail
-// Y1 then X1 for what appears to be every single icon ID
-#if BUILD == JpnTrial || BUILD == JpnRetail
-	char font_X1Y1data[0xC8];
-#endif
-
-// Offset data for extra characters in the European version, which are pre-existing icons with offsets and scaling applied
-// The extra characters are " ¡ ¿ º and ~ used as diacritical (e.g. Ñ)
-
-// 80082948 -- EurRetail
-// width, height, icon scale in that order, same as font_indentPixDimensions except with 3 variables
-#if BUILD == EurRetail
-	s16 font_EurDiacriticalTilde[FONT_NUM * 3];
-
-	// 80082960 -- EurRetail
-	s16 font_EurQuotationMarkWidth[FONT_NUM];
-	// 80082968 -- EurRetail
-	s16 font_EurInvertedExclamationMarkData[FONT_NUM * 2];
-	// 80082978 -- EurRetail
-	s16 font_EurInvertedQuestionMarkData[FONT_NUM * 2];
-	// 80082988 -- EurRetail
-	s16 font_EurOrdinalIndicatorData[FONT_NUM * 2];
-	// 80082998 -- EurRetail
-	s16 font_EurPixWidthExtra[FONT_NUM];
-#endif
-
-	// 80080684 -- SepReview
-	// 80082488 -- UsaRetail
-	// 800815b4 -- JpnTrial
-	// 800829a0 -- EurRetail
-	// 800858d0 -- JpnRetail
+	// 80082488
 	u16 pauseScreenStrip[0x10];
 
-	// 800824a8 -- UsaRetail
+	// 800824a8
 	struct GamepadButtonMap gamepadMapBtn[20];
 
-// 80080744 -- SepReview	7C4
-// 80082548 -- UsaRetail	74C
-// 80081674 -- JpnTrial		814
-// 80082A60 -- EurRetail	730
-// 80085990 -- JpnRetail	820
-#if BUILD <= EurRetail
+	// 80082548
 	SpuReverbAttr reverbParams[5]; // 5*0x14 = 0x64
-#else
-	SpuReverbAttr reverbParams[6]; // 6*0x14 = 0x78
-#endif
 
 	// distort = [0, 0xff],
 	// one value for each distortion
@@ -1698,94 +1532,50 @@ struct Data
 	// 800829ac
 	int distortConst_OtherFX[0x100];
 
-	// 80080fa8 -- SepReview
-	// 80082dac -- UsaRetail
-	// 80081ed8 -- JpnTrial
-	// 800832c4 -- EurRetail
-	// 80086208 -- JpnRetail
+	// 80082dac
 	u8 volumeLR[0x100];
 
-	// 80082eac -- UsaRetail
+	// 80082eac
 	// for notes ABCDEFG, and if all
 	// are set to the same value, all notes are the same
 	u16 noteFrequency[0x6C];
 
-// 80082f84
-// array of data for Instrument Pitch
-#if BUILD <= SepReview
-	u16 distortConst_Music[0x80];
-#else
+	// 80082f84
+	// array of data for Instrument Pitch
 	u16 distortConst_Music[0x40];
-#endif
 
-#if BUILD == JpnRetail
-	// 80086460
-	// SpuReverbAttr is 0x14 bytes, another five of those?
-	char unkJpnRetail_between_pitch_opcodeFunc[5 * 0x14];
-#endif
 
-	// 80081280 -- SepReview
-	// 80083004 -- UsaRetail
-	// 80082130 -- JpnTrial
-	// 8008351c -- EurRetail
-	// 800864c4 -- JpnRetail
+	// 80083004
 	void (*opcodeFunc[0xb])(struct SongSeq *);
 
-	// 800812ac -- SepReview
-	// 80083030 -- UsaRetail
-	// 8008215c -- JpnTrial
-	// 80083548 -- EurRetail
-	// 800864f0 -- JpnRetail
+	// 80083030
 	int opcodeOffset[0xb];
 
 	// 8008305c
-	// 0x84 for UsaRetail, 0x60 for JpnRetail and beyond
+	// 0x84-byte entry
 	struct
 	{
-		s16 index
-#if BUILD <= UsaRetail
-		    [0x16]; // contains 0x13 numbers
-#elif BUILD >= JpnTrial
-		    [0x10];
-#endif
+		s16 index[0x16]; // contains 0x13 numbers
 
 		struct
 		{
 			void *ptr;
 			int num;
-		} voiceSet
-#if BUILD <= UsaRetail
-		    [0xb];
-#elif BUILD >= JpnTrial
-		    [8];
-#endif
+		} voiceSet[0xb];
 
 	} voiceData[0x10];
 
-	// 80081b18 -- SepReview
-	// 8008389c -- UsaRetail
-	// 80082788 -- JpnTrial
-	// 80083b74 -- EurRetail
-	// 80086b1c -- JpnRetail
+	// 8008389c
 	int voiceSetPtr[0x10];
 
-	// 800838dc -- UsaRetail
+	// 800838dc
 	u8 voiceID[0x18];
 
-#if (BUILD == JpnTrial) || (BUILD == JpnRetail)
-	// JpnRetail, FUN_8002e940(Voiceline_StartPlay), 80086b74
-	s16 unkBetween_voiceID_SongSetBytes[10];
-#endif
 
-	// 800838f4 -- UsaRetail
-	// 80086b88 -- JpnRetail
+	// 800838f4
 	u8 advHubSongSetBytes[0x14];
 
-	// 80081b84 -- SepReview
-	// 80083908 -- UsaRetail
-	// 80082808 -- JpnTrial
-	// 80083be0 -- EurRetail
-	// 80086b9c -- JpnRetail
+	// 80083908
 	s16 nTropyXA[6];
 
 	// 80083914
@@ -1800,11 +1590,7 @@ struct Data
 	// 8008398c
 	u8 levAmbientSound[0x84];
 
-	// 80081c8c -- SepReview
-	// 80083a10 -- UsaRetail
-	// 80082910 -- JpnTrial
-	// 80083ce8 -- EurRetail
-	// 80086ca4 -- JpnRetail
+	// 80083a10
 	DriverModelExtraSlot driverModelExtras[LOAD_DRIVER_MODEL_EXTRA_COUNT];
 
 	// 80083a1c
@@ -1840,11 +1626,7 @@ struct Data
 	// 233 = 80031a38
 	void *overlayCallbackFuncs[4]; // probably `(void(*)(struct LoadQueueSlot*))[4]`
 
-	// 80081CFC -- SepReview
-	// 80083A80 -- UsaRetail
-	// 80082980 -- JpnTrial
-	// 80083D58 -- EurRetail
-	// 80086D14 -- JpnRetail
+	// 80083A80
 	struct MetaDataLEV metaDataLEV[0x41];
 
 	// 80084098
@@ -1853,23 +1635,16 @@ struct Data
 	// etc
 	s16 BeatBossPrize[6];
 
-	// 800840a4 -- UsaRetail
+	// 800840a4
 	// 5 cups, 4 tracks each
 	int advCupTrackIDs[5 * 4];
 
-	// 800840f4 -- UsaRetail
+	// 800840f4
 	// array of track IDs in Adv, in order of trophies
 	s16 advHubTrackIDs[16];
 
-	// 80084114 -- UsaRetail
-	struct
-	{
-		s16 lngIndex_CupName;
-
-		// color of gem and token in portals
-		s16 color[3];
-
-	} AdvCups[5];
+	// 80084114
+	struct AdventureCup AdvCups[5];
 
 	// 8008413C
 	// 0 - ripper roo's challenge
@@ -1877,7 +1652,7 @@ struct Data
 	// ...
 	s16 lng_challenge[6];
 
-	// 80084148 -- UsaRetail
+	// 80084148
 	struct
 	{
 		// used to draw each string
@@ -1896,11 +1671,7 @@ struct Data
 	} ArcadeCups[4];
 
 	// 0x2C bytes large
-	// 8008240C -- SepReview
-	// 80084190 -- UsaRetail
-	// 80083090 -- JpnTrial
-	// 80084468 -- EurRetail
-	// 80087424 -- JpnRetail
+	// 80084190
 	struct RectMenu menuRacingWheelConfig;
 
 	// 0x800841BC
@@ -1910,28 +1681,17 @@ struct Data
 	// 0x800841D0
 	struct RectMenu menuQuit;
 
-#if BUILD >= UsaRetail
 	// 800841FC -- 24 bytes (0x18)
 	struct RacingWheelData rwd[4];
-#endif
 
 	// 80084214
 	char kartHwlPath[0x14];
 
-	// 8008249c -- SepReview
-	// 80084228 -- UsaRetail
-	// 80083128 -- JpnTrial
-	// 80084500 -- EurRetail
-	// 800874bc -- JpnRetail
+	// 80084228
 	void *PtrClipBuffer[4];
 
-// not in Sep3, after PtrClipBuffer is 0,3,6,9
-#if BUILD >= UsaRetail
-
-#if BUILD <= EurRetail
 	// 80084238
 	s16 lngIndex_unused_multiplayerDirections[6];
-#endif
 
 	// 80084244
 	s16 lngIndex_gamepadUnplugged[6];
@@ -1939,37 +1699,16 @@ struct Data
 	// 80084250
 	// heights that "gamepad unplugged" can be at
 	s16 errorPosY[4];
-#endif
 
-// 800824ac -- SepReview
-// 80084258 -- UsaRetail
-// 80083158 -- JpnTrial
-// 80084530 -- EurRetail
-// 800874e0 -- JpnRetail
-#if BUILD <= SepReview
-	// Remember Menu is bigger in SepReview
-	char data_preAdvHub[0x64];
-
-// UsaRetail, JpnTrial, EurRetail, JpnRetail
-#else
+	// 80084258
 
 	// block should be 0x78 bytes
 
 	// 80084258
-	struct
-	{
-		s16 lngIndex;
-		s16 lo16;
-		s16 hi1;
-	} raceConfig_DeadZone[4];
+	struct RaceWheelConfigOption raceConfig_DeadZone[4];
 
 	// 80084270
-	struct
-	{
-		s16 lngIndex;
-		s16 lo16;
-		s16 hi1;
-	} raceConfig_Range[5];
+	struct RaceWheelConfigOption raceConfig_Range[5];
 	s16 padding8008428e;
 
 	// 80084290
@@ -1981,23 +1720,14 @@ struct Data
 
 	// 800842B8
 	u8 raceConfig_colors_blueRect[0x18];
-#endif
 
-#if BUILD <= JpnTrial
-	// 80082510 - Sep3
-	// 800842D0 - UsaRetail
-	// 800831d0 - JpnTrial
-	u8 unkNamcoGamepadRwdTriangleColors[0xc];
+	// 800842D0
+	u8 jogConTriangleColors[0xc];
 
-	// 800842DC - UsaRetail
+	// 800842DC
 	s16 unkNamcoGamepad_800842DC[0x30 / 2];
-#endif
 
-	// 8008254c -- sep3
-	// 8008430c -- UsaRetail
-	// 8008320c -- JpnTrial
-	// 800845a8 -- EurRetail
-	// 80087558 -- JpnRetail
+	// 8008430c
 	int gGT_gameMode1_VibPerPlayer[4];
 
 	// 8008431c
@@ -2021,17 +1751,11 @@ struct Data
 		u16 sizeY;
 	} Options_HighlightBar[9];
 
-	// 0x800825A8 -- SepReview
-	// 0x80084368 -- UsaRetail
-	// 0x80083268 -- JpnTrial
-	// 0x80084604 -- EurRetail
-	// 0x800875B4 -- JpnRetail
+	// 0x80084368
 	struct MenuRow rowsAdvHub[5];
 
-// +2 padding
-#if BUILD == UsaRetail
+	// +2 padding
 	char padding_advhub[2];
-#endif
 
 	// 0x80084388 -- 2C
 	struct RectMenu menuAdvHub;
@@ -2039,10 +1763,8 @@ struct Data
 	// 0x800843B4
 	struct MenuRow rowsAdvRace[5];
 
-// +2 padding
-#if BUILD == UsaRetail
+	// +2 padding
 	char padding_advrace[2];
-#endif
 
 	// 0x800843D4 -- 2C
 	struct RectMenu menuAdvRace;
@@ -2068,16 +1790,10 @@ struct Data
 	// 0x800844E4
 	struct MenuRow rowsArcadeRace[7];
 
-// +2 padding
-#if BUILD == UsaRetail
+	// +2 padding
 	char padding_arcaderace[2];
-#endif
 
-	// 0x80082778 -- SepReview -- Menu struct was 8 bytes larger
-	// 0x80084510 -- UsaRetail
-	// 0x80083410 -- JpnTrial
-	// 0x800847AC -- EurRetail
-	// 0x8008775C -- JpnRetail
+	// 0x80084510
 	struct RectMenu menuArcadeRace;
 
 	// 0x8008453C
@@ -2140,41 +1856,17 @@ struct Data
 	// 0x800859d0
 	struct MetaDataBOSS *bossWeaponMetaPtr[5];
 
-#if BUILD == SepReview
-	// Maybe there's more menu structs???
-	// between menus and here there's 0x1C bytes
-	char extraSepReviewAfterMenus[0x1C];
-#endif
 
 	// address 0x800859E4
 	// size 0x14
 	// BASCUS-94426-SLOTS
 	char s_BASCUS_94426_SLOTS[0x14];
 
-#if BUILD == SepReview
-	char s_CTR_Saved_Games_and_Scores[0x1C];
-#else
-#if BUILD == JpnTrial
-	char data28_afterSlots[0x28];
-#elif BUILD == UsaRetail || BUILD == EurRetail || BUILD == JpnRetail
 	// 0x800859F8
 	u8 memcardIcon_HeaderSLOTS[0x38];
-#endif
-
-// Something changed in JPN
-// After menuArcadeRace
-// Before s_BASCUS_94426G_Question
-#if BUILD == JpnRetail
-	char fillerJpn[0x18];
-#endif
-#endif
 
 	// Question marks are part of strings
-	// 80083CA0 BASCUS-94426G??????? -- SepReview
-	// 80085A30 BASCUS-94426G??????? -- UsaRetail
-	// 80084920 BIPCPX-96183G??????? -- JpnTrial
-	// 80085CCC BASCES-02105G??????? -- EurRetail
-	// 80088C94 BISCPS-10118G??????? -- JpnRetail
+	// 80085A30
 	char s_BASCUS_94426G_Question[0x14];
 
 	// 0x80085A44
@@ -2185,12 +1877,9 @@ struct Data
 	// 0x80085A54
 	struct MenuRow rowsSaveGame[3];
 
-// +2 padding (0x14 total) 0x14 = 20, 3*6 +2
-#if BUILD == UsaRetail
+	// +2 padding (0x14 total) 0x14 = 20, 3*6 +2
 	char padding_savegame[2];
-#endif
 
-	// 0x80085A68 -- 2C (+8 for SepReview)
 	struct RectMenu menuSaveGame;
 
 	// 0x80085A94
@@ -2198,45 +1887,28 @@ struct Data
 	// which loads a LEV from track selection
 	struct RectMenu menuQueueLoadTrack;
 
-	// 80083d40 -- SepReview -- remember Menues are larger
-	// 80085AC0 -- UsaRetail
-	// 800849b0 -- JpnTrial
-	// 80085d5c -- EurRetail
-	// 80088d24 -- JpnRetail
+	// 80085AC0
 	// MATRIX struct at 80085AC0
 	MATRIX matrixTitleFlag;
 
 	// 80085AE0
 	int checkerFlagVariables[5];
 
-#if BUILD >= UsaRetail
-	// 80085AF4 -- UsaRetail
-	// 800849e4 -- JpnTrial
-	// 80085d90 -- EurRetail
-	// 80088d58 -- JpnRetail
+	// 80085AF4
 	s16 PlayerCommentBoxParams[8];
-#endif
 
-// 80083D74 -- SepReview
-// 80085B04 -- UsaRetail
-// 800849f4 -- JpnTrial
-// 80085DA0 -- EurRetail
-// 80088D68 -- JpnRetail
-// 0 - Warning, No Memory Card (save/load)
-// 1 - Warning, Memory Card Unformatted
-// 2 - Formatting...
-// 3 - Saving to Memory Card...
-// 4 - Loading...
-// 5 - Checking... No Memory Card (new profile)
-// 6 - Warning, not enough room to save ghost (two blocks)
-// 7 - error occured whlie reading memory card
-// 8 - NULL (draw no box)
-// 9 - No Data
-#if BUILD == JpnTrial
-	int messageScreens[5];
-#else
+	// 80085B04
+	// 0 - Warning, No Memory Card (save/load)
+	// 1 - Warning, Memory Card Unformatted
+	// 2 - Formatting...
+	// 3 - Saving to Memory Card...
+	// 4 - Loading...
+	// 5 - Checking... No Memory Card (new profile)
+	// 6 - Warning, not enough room to save ghost (two blocks)
+	// 7 - error occured whlie reading memory card
+	// 8 - NULL (draw no box)
+	// 9 - No Data
 	int messageScreens[10]; // or is it (dec) 14?
-#endif
 
 	// 80085B2C
 	// [0] = 0x13C - FINISHED!
@@ -2246,52 +1918,31 @@ struct Data
 	// 80085B3C
 	struct MenuRow rowsGreenLoadSave[5];
 
-// +2 padding (0x14 total) 0x14 = 20, 3*6 +2
-#if BUILD == UsaRetail
+	// +2 padding (0x14 total) 0x14 = 20, 3*6 +2
 	char padding_greenloadsave[2];
-#endif
 
-	// 80083dcc -- SepReview	0x58 (from messageScreens)
-	// 80085b5c -- UsaRetail	0x58 (from messageScreens)
-	// 80084a38 -- JpnTrial		0x44 (from messageScreens)
-	// 80085df8 -- EurRetail	0x58 (from messageScreens)
-	// 80088dc0 -- JpnRetail	0x58 (from messageScreens)
+	// 80085b5c
 	// menu for green save/load screen
 	struct RectMenu menuGreenLoadSave;
 
-#if BUILD == SepReview
-	// 80083e00 -- SepReview
-	// 4 "rows" for 4 profile boxes in Adv LoadSave screen,
-	struct MenuRow rowsFourAdvProfiles[5];
-#endif
 
-	// 80083e20 -- SepReview
-	// 80085b88 -- UsaRetail
+	// 80085b88
 	// menu to draw adventure profiles
 	struct RectMenu menuFourAdvProfiles;
 
-	// 80083e54 -- SepReview
-	// 80085bb4 -- UsaRetail
+	// 80085bb4
 	// menu for ghosts
 	struct RectMenu menuGhostSelection;
 
-	// 80083e88 -- SepReview
-	// 80085be0 -- UsaRetail
+	// 80085be0
 	// menu for "Warning, no memory card"
 	struct RectMenu menuWarning2;
 
-	// 80083ebc -- SepReview
-	// 80085c0c -- UsaRetail
-	// 80085ea8 -- EurRetail
-	// 80088e70 -- JpnRetail
+	// 80085c0c
 	// menu for "Please Enter Your Name"
 	struct RectMenu menuSubmitName; // on-screen keyboard
 
-	// 80083ef0 -- SepReview -- remember Menues are larger
-	// 80085c38 -- UsaRetail
-	// 80084b14 -- JpnTrial
-	// 80085ed4 -- EurRetail
-	// 80088e9c -- JpnRetail
+	// 80085c38
 	struct RectMenu menuQueueLoadHub;
 
 	// 0x80085C64
@@ -2343,35 +1994,20 @@ struct Data
 	// 80085D5C
 	struct RectMenu menuOverwriteGhost;
 
-	// 80084058 -- SepReview
-	// 80085D88 -- UsaRetail
+	// 80085D88
 	s16 lngStringsSaveLoadDelete[6];
 
-// A.B.C.D... all the way to Z and then numbers,
-// used in high score "Enter Your Name" window
-// 80085D94 -- UsaRetail
-#if BUILD == SepReview || BUILD == UsaRetail || BUILD == EurRetail
+	// A.B.C.D... all the way to Z and then numbers,
+	// used in high score "Enter Your Name" window
+	// 80085D94
 	// 26 letters, 10 numbers, period, underscore, arrow, nullptr
 	u16 unicodeAscii[40];
-#elif BUILD == JpnRetail
-	u16 unicodeAscii[40 + 94]; // extra Jpn characters
-#else
-	// this does not exist in JpnTrial
-#endif
 
-#if BUILD != JpnTrial
 	// 80085DE4
 	// pointer to sounds for menus
 	int soundIndexArray[6];
-#else
-	                           // this does not exist in JpnTrial
-#endif
 
-	// 800840CC -- SepReview
-	// 80085dfc -- UsaRetail
-	// 80084C70 -- JpnTrial
-	// 80086098 -- EurRetail
-	// 8008911C -- JpnRetail
+	// 80085dfc
 
 	// 00 - weaponIcon
 	// 01 - lapCount
@@ -2440,11 +2076,7 @@ struct Data
 	// 800862f8
 	s16 trackerType[4];
 
-	// 0x800845D0 -- SepReview
-	// 0x80086300 -- UsaRetail
-	// 0x80085174 -- JpnTrial
-	// 0x8008659C -- EurRetail
-	// 0x80089620 -- JpnRetail
+	// 0x80086300
 	struct MenuRow rowsRetryExit[3];
 
 	// +2 padding
@@ -2452,31 +2084,16 @@ struct Data
 	// 0x80086314
 	struct RectMenu menuRetryExit;
 
-	// SepReview -- 0x80084618
-	// UsaRetail -- 0x80086340
+	// 0x80086340
 	int RelicTime[3 * 18];
 
-// SepReview 800846F0
-#if BUILD == SepReview
-	// somewhere between
-	// relic race and speedometer,
-	// are these all zeros???
-	char sep3_234[0x234];
-#endif
-
-	// SepReview -- 0x80084924
-	// UsaRetail -- 0x80086418
+	// 0x80086418
 	struct
 	{
 		SVec2 pos[3];
 
-		// Each vertex in the triangle
-		// has an int for color, there
-		// are two arrays because the
-		// icon was designed to blink
-
-		int vertCol1[3];
-		int vertCol2[3];
+		// Two blink frames, each containing the three packed vertex colors.
+		s32 colors[2][3];
 
 	} playerIconAdvMap;
 
@@ -2488,131 +2105,13 @@ struct Data
 	// FUN_80050654
 	s16 battleScoreColor[4][4];
 
-	// 0x80084978 -- SepReview
-	// 0x8008646C -- UsaRetail
-	// 0x800852e0 -- JpnTrial
-	// 0x80086708 -- EurRetail
-	// 0x8008978c -- JpnRetail
+	// 0x8008646C
 	Point speedometerBG_vertData[2][14];
 
-// 0x800864DC
-// LNG index for end-of-race comments
-#if BUILD >= JpnTrial
-	u8 data830[0x830];
-#elif BUILD >= SepReview
-	u8 data850[0x850];
-#endif
+	// 0x800864DC
+	struct EndRaceQuipData endRaceQuips;
 
-#if 0
-
-	// VS QUIPs
-	// [0x00] = HOP HAPPY,		RARE AIR, 		0, 1, 0x28, 	0x554(numberOfJumps), 2
-	// [0x01] = RARE AIR, 		WALLFLOWER, 	1, 1, 0x12c0, 	0x53c(timeSpentJumping), 4
-	// [0x02] = WALLFLOWER, 	MISSILE MAGNET	0, 1, 0xf00,	0x530(timeSpentAgainstWall), 4
-	// [0x03] = MISSILE MAGNET,		---,		0, 0, 2, 		0x55d(numTimesMissileHitYou), 1
-	// [0x04] = MOST BOMBED, 		---, 		0, 0, 2,		0x55e(numTimesBombHitYou), 1
-	// [0x05] = WHAT'S A PICKUP?, 	---,		1, 1, 1,		0x568(numTimesHitWeaponBox), 1	
-	// [0x06] = SLOWPOKE,			---,		1, 0, 0xfa0,	0x518(distanceDriven), 4
-	// [0x07] = MOST DIZZY, 		---,		0, 1, 0xb40,	0x540(timeSpentSpinningOut), 4
-	// [0x08] = SITTING DUCK,		---,		4, 0, 3,		0x57c(numTimesAttacked), 4
-	// [0x09] = S'S CHUMP,			---,		3, 0, 3,		0x560(numTimesAttackedByPlayer), 8
-	// [0x0A] = BAD SHOT,			---,		1, 0, 0x800,	0x574(NumMissilesComparedToNumAttacks), 4
-	// [0x0B] = FALL GUY,			---,		0, 0, 3,		0x56a(numTimesMaskGrab), 1
-	// [0x0C] = LEAST FRUIT,		---,		1, 1, 6,		0x569(numTimesWumpa), 1
-	// [0x0D] = MINE SWEEPER,		---,		0, 1, 1,		0x55f(numTimesMotionlessPotionHitYou), 1
-	// [0x0E] = MUD DOG,			---,		0, 1, 0xf00,	0x524(timeSpentInMud), 4
-	// [0x0F] = PLANT FOOD,			---,		0, 0, 0xb40,	0x548(timeSpentEaten), 4
-	// [0x10] = MOST BURNED,		---,		0, 1, 0xf00,	0x54c(timeSpentBurnt), 4
-	// [0x11] = FLATMAN,			---,		0, 1, 0x12c0,	0x544(timeSpentSquished), 4
-	// [0x12] = MR. REVERSE,		---,		0, 1, 0x1e00,	0x520(timeSpentReversing), 4
-	// [0x13] = SKID SQUID,			---,		0, 1, 0x12c0,	0x51c(timeSpentWithHighSpeed), 4
-	// [0x14] = TURBO MASTER,		---,		0, 1, 0x4b00,	0x534(timeSpentUsingReserves), 4
-	// [0x15] = SUPER SLIDER,		---,		0, 1, 0x4b00, 	0x538(timeSpentDrifting), 4
-	// [0x16] = MOST AIR TIME,		---,		0, 1, 0x1e00,	0x53c(timeSpentJumping), 4
-	// [0x17] = BIGGEST AIR,		---,		0, 0, 0x3c0,	0x550(highestJump), 2
-	// [0x18] = BEAKER ACE,			---,		0, 0, 0,		0x556(numTimesMovingPotionHitSomeone), 1
-	// [0x19] = MISSILE MASTER,		---,		0, 0, 2,		0x557(numTimesMissileHitSomeone), 1
-	// [0x1a] = CRATES 'R' US,		---,		0, 1, 2,		0x568(numTimesHitWeaponBox), 1
-	// [0x1b] = FASTEST RACER,		---,		0, 0, 0xfa0,	0x518(distanceDriven), 4
-	// [0x1c] = KING OF THE PACK,	---,		0, 0, 3,		0x559(numTimesAttacking), 1
-	// [0x1d] = UNTOUCHABLE,		---,		1, 0, 1,		0x57c(numTimesAttacked), 4
-	// [0x1e] = BEST AIM,			---,		0, 0, 0x800,	0x574(NumMissilesComparedToNumAttacks), 4
-	// [0x1f] = LONGEST SHOT,		---,		0, 0, 0x3c0,	0x552(longestShot), 2
-	// [0x20] = MOST JUICED UP,		---,		0, 1, 0x12c0,	0x52c(timeSpentInTenWumpa), 4
-	// [0x21] = FRUIT HOG,			---,		0, 1, 0xc,		0x569(numTimesWumpa), 1
-	// [0x22] = COMEBACK KID,		---,		0, 0, 0x2580,	0x578(TimeWinningDriverSpentLastPlace), 4
-	// [0x23] = CLOCK JOCK,			---,		0, 0, 1,		0x558(numTimesClockWeaponUsed), 1
-	// [0x24] = SPEED DEMON!,		---,		5, 0, 0x2580,	0x514(timeElapsedInRace), 4
-	// [0x25] = STEAMROLLER,		---,		0, 0, 1,		0x55b(numTimesSquishedSomeone), 1
-	// [0x26] = OUT OF GAS!,		NULL,		9, 0, 0,		0x559(numTimesAttacking), 1
-
-	// 0x27 quip metas,
-	800864DC - 8008664c // VS QuipStr array (0x2E)
-	8008664c - 800869f4 // VS QuipMeta array (0x27)
-
-	// BATTLE QUIPs
-	// [0x0] = SMACK MAN, 	DISASTER MASTER!,	7, 0, 0,	0x559(numTimesAttacking), 1
-	// [0x1] = SO CLOSE!,	SMACK MAN,			7, 0, 1,	0x559(numTimesAttacking), 1
-	// [0x2] = TOASTED!,	LOST IN SPACE,		8, 8, 0,	0x559(numTimesAttacking), 1
-	// [0x3] = DISASTER MASTER!, THE DOMINATOR!,8, 2, 0xF,	0x4f6(quip4), 2
-	// [0x4] = THE DOMINATOR!, COMEBACK KID!,	4, 6, 2,	0x559(numTimesAttacking), 1
-	// [0x5] = COMEBACK KID!, GAVE IT AWAY!,	0, 6, 3,	0x4f2(quip2), 2
-	// [0x6] = GAVE IT AWAY!, DEATH TOUCH!,		0, 2, 2,	0x4f4(quip3), 2
-	// [0x7] = DEATH TOUCH!, ACID RAINMAN!,		8, 6, 6,	0x4f0(quip1), 2
-	// [0x8] = ACID RAINMAN!, BULL'S EYE!,		8, 6, 4,	0x4f0(quip1), 2
-	// [0x9] = BULL'S EYE!, FISH IN A BARREL!,	8, 6, 1,	0x4f0(quip1), 2
-	// [0xA] = FISH IN A BARREL!, --invalid--,	6, 4, 0,	0x575(NumMissilesComparedToNumAttacks>>8), 1
-	// [0xB] = LOST IN SPACE, SO CLOSE!,		9, 0, 0, 	0x559(numTimesAttacking, 1)
-	
-	// --invalid-- maybe should've been TOASTED,
-	// accidentally pointed to 80086c0c instead of QuipStr
-
-	// 0xC quip metas,
-	800869f4 - 80086c0c // Battle QuipStr array (0x43)
-	80086c0c - 80086d2c // Battle QuipMeta array (0xC)
-
-	struct QuipStr
-	{
-		s16 lngIndex;
-		s16 flag; // &1 means include Crash/Cortex/Coco name
-		
-		s16 unused1;
-		s16 unused2;
-	};
-
-	// Quip = End-Of-Race comment
-	struct QuipMeta
-	{
-		// QuipMeta->next = QuipMeta->next->next,
-		// This removes QuipStr from search algorithm,
-		// to make it impossible for quips to repeat.
-		// Somewhere the linked list needs to restart itself
-		struct QuipStr* ptrQuipStrCurr;
-		struct QuipStr* ptrQuipStrNext;
-		
-		s16 unk0;
-
-		// 0xA
-		s16 unk1;
-
-		// 0xC
-		int unk2;
-
-		// 0x10
-		// offset of driver to pull data from,
-		// and the amount of bytes in the variable
-		int driverOffset;
-		int dataSize;
-
-		// 0x18 each
-	};
-#endif
-
-	// 0x80085238 -- SepReview
-	// 0x80086d2c -- UsaRetail
-	// 0x80085B80 -- JpnTrial
-	// 0x80086fa8 -- EurRetail
-	// 0x8008A02C -- JpnRetail
+	// 0x80086d2c
 	// Red, Green, Blue, Yellow, Purple, NULL
 	s16 advCupStringIndex[6];
 
@@ -2636,12 +2135,7 @@ struct Data
 	// in character selection screen
 	struct MetaDataCHAR MetaDataCharacters[0x10];
 
-	// 0x80086E38 -- Aug14
-	// 0x80085390 -- SepReview
-	// 0x80086e84 -- UsaRetail
-	// 0x80085CD8 -- JpnTrial
-	// 0x80087100 -- EurRetail
-	// 0x8008a184 -- JpnRetail
+	// 0x80086e84
 	s16 characterIDs[8];
 
 	// 0x80086e94
@@ -2675,11 +2169,7 @@ struct Data
 	// (0xF) oxide uses crash bandicoot
 
 	// 0x80087EF4 - pointer to 0x80086e94
-	struct
-	{
-		void *physEntry;
-		int numEntries;
-	} bakedGteMath[BAKED_GTE_MATRIX_COUNT];
+	struct BakedGteMatrixTable bakedGteMath[BAKED_GTE_MATRIX_COUNT];
 
 	// 0x80087f94
 	struct Scrub MetaDataScrub[7];
@@ -2694,11 +2184,7 @@ struct Data
 	// 0x800884CC
 	struct Terrain MetaDataTerrain[0x15];
 
-	// 0x80086f18 -- SepReview
-	// 0x80088A0C -- UsaRetail
-	// 0x80087860 -- JpnTrial
-	// 0x80088C88 -- EurRetail
-	// 0x8008BD0C -- JpnRetail
+	// 0x80088A0C
 	struct MetaPhys metaPhys[65]; // 0x71C bytes total
 
 	// 80089128, nullify to remove Player bubble exhaust underwater in 1P mode
@@ -2752,8 +2238,7 @@ struct Data
 	// 80089c04, nullify to remove warpball particles
 	struct ParticleEmitter emSet_Warpball[0xB];
 
-	// 80089eb0 and 8008a018 are mystery effects,
-	// maybe the removed sep3 warppad effects, dont know
+	// 80089eb0 and 8008a018 are unidentified effects.
 
 	// 80089d90, nullify to remove maskgrab particles (similar to "drop", not the same)
 	struct ParticleEmitter emSet_Maskgrab[0x1C];
@@ -2792,21 +2277,51 @@ CTR_STATIC_ASSERT(offsetof(struct Data, podiumModel_firstPlace) == offsetof(stru
 CTR_STATIC_ASSERT(offsetof(struct Data, currSlot) == offsetof(struct Data, driverModelExtras) + 11 * sizeof(void *));
 CTR_STATIC_ASSERT(sizeof(((struct Data *)0)->characterIDs_2P_AIs) == 0x1c);
 CTR_STATIC_ASSERT(offsetof(struct Data, bakedGteMath) == 0x7554);
+CTR_STATIC_ASSERT(offsetof(struct Data, endRaceQuips) == 0x5b3c);
+CTR_STATIC_ASSERT(offsetof(struct Data, advCupStringIndex) == 0x638c);
 CTR_STATIC_ASSERT(sizeof(((struct Data *)0)->bakedGteMath) == BAKED_GTE_MATRIX_COUNT * 8);
 
-// 0x8008D218 -- Early June? PizzaHut USA
-// 0x8008b3d0 -- SepReview
-// 0x8008CF6C -- UsaRetail
-// 0x8008bec4 -- JpnTrial
-// 0x8008D2EC -- EurRetail
-// 0x80090370 -- JpnRetail
+// NOTE(aalhendi): Grouping the resident block keeps its far-page base and
+// field offsets shared by native and PSX instead of duplicating raw addresses.
+struct MemcardState
+{
+	// NOTE(aalhendi): Bit 0 copies frame 2 into frame 1.
+	s32 memcardUnk1;
+	// NOTE(aalhendi): MC_RESULT and MC_ACTION state.
+	s16 desired_memcardResult;
+	s16 frame1_memcardAction;
+	s16 frame1_memcardSlot;
+	s16 frame2_memcardAction;
+	s16 frame2_memcardSlot;
+	s16 frame3_memcardAction;
+	s16 frame3_memcardSlot;
+	s16 frame4_memcardAction;
+	s16 frame4_memcardSlot;
+	s16 padding8009aa46;
+	char *ghostProfile_fileName;
+	char *ghostProfile_fileIconHeader;
+	// NOTE(aalhendi): Destination for ghost load; source for ghost save.
+	struct GhostHeader *ghostProfile_ptrGhostHeader;
+	s16 ghostProfile_size3E00;
+	// NOTE(aalhendi): Set for one frame, then reset to -1.
+	s16 ghostProfile_rowSelect;
+	s16 ghostProfile_indexSave;
+	s16 ghostProfile_indexLoad;
+	s16 numGhostProfilesSaved;
+	s16 padding_8009aa5e;
+	struct GhostProfile ghostProfile_memcard[7];
+	struct GhostProfile ghostProfile_current;
+};
+
+CTR_STATIC_ASSERT(sizeof(struct MemcardState) == 0x1d0);
+CTR_STATIC_ASSERT(offsetof(struct MemcardState, numGhostProfilesSaved) == 0x2c);
+CTR_STATIC_ASSERT(offsetof(struct MemcardState, ghostProfile_memcard) == 0x30);
+
+// 0x8008CF6C
 struct sData
 {
-// 8008CF6C
-#if BUILD >= UsaRetail
-	// missing in Sep3
+	// 8008CF6C
 	int langBufferSize;
-#endif
 
 	// 0x8008CF70
 	s16 *arcade_difficultyParams;
@@ -2827,11 +2342,7 @@ struct sData
 	// 0x8008CF88
 	int AI_VelY_WhenBlasted_0x3000;
 
-	// 8008b3ec -- SepReview
-	// 8008CF8C -- UsaRetail
-	// 8008bee4 -- JpnTrial
-	// 8008d30c -- EurRetail
-	// 80090390 -- JpnRetail
+	// 8008CF8C
 	char s_camera[8];
 
 	// 8008CF94
@@ -2856,18 +2367,9 @@ struct sData
 	char s_ENG[4];
 	char s_JPN[4];
 
-// Other builds move these elsewhere
-#if BUILD == EurRetail
-	int XNFf_ptr;
-	int unk_8008D344;
-#endif
-
 	// 8008CFC0
 	char s_XINF[8];
 
-#if BUILD == SepReview
-	char s_SISHEAD[0x8];
-#endif
 
 	char s_BLADE[8];
 	char s_TURBO[8];
@@ -2909,24 +2411,10 @@ struct sData
 	// "Kyle's Mom"
 	s16 pause_state;
 
-	// 8008d038 -- UsaRetail
-	// 8008d3c0 -- EurRetail
-	u8 unkPadSetActAlign[8];
+	// 8008d038
+	u8 padActuatorAlignment[8];
 
-// ==========================================================
-
-// Eur and Japan
-#if BUILD >= EurRetail
-	// 8008d3c8 -- EurRetail
-	// calls padSetAct on slot 2, after realizing a multitap is in slot 1
-	u8 unkPadSetAct[0x4];
-#endif
-
-	// 8008b4a8 -- SepReview
-	// 8008D040 -- UsaRetail
-	// 8008bf98 -- JpnTrial
-	// 8008d3cc -- EurRetail
-	// 80090448 -- JpnRetail
+	// 8008D040
 	char s_ghost[8];
 
 	// 8008D048
@@ -2939,17 +2427,13 @@ struct sData
 	u32 audioRNG;
 
 	// 8008D05C
-	int boolAudioEnabled;
+	u8 boolAudioEnabled;
+	u8 _pad_boolAudioEnabled[3];
 
-	// 8008b4c8 -- SepReview
-	// 8008D060 -- UsaRetail
-	// 8008bfb8 -- JpnTrial
-	// 8008d3ec -- EurRetail
-	// 80090468 -- JpnRetail
+	// 8008D060
 	char s_HOWL[8];
 
-	// 8008D068 -- UsaRetail (and 8008D06C)
-	// 80090470 -- JpnRetail
+	// 8008D068
 	struct SongSet advHubSongSet;
 
 	// 8008d070
@@ -2958,25 +2442,14 @@ struct sData
 	// 8008d078
 	u8 songBankBossID[8];
 
-#if BUILD == EurRetail
-	// 8008d40c
-	// extra 8 bytes
-	char Eur_ExtraBytes[8];
-#endif
 
-#if BUILD >= UsaRetail
 	// 8008d080
 	// used in Garage_LerpFX
 	u8 garageSoundIDs[8];
-#endif
 
 	// ============================
 
-	// 8008b4e8 - Sep3
-	// 8008d088 - UsaRetail
-	// 8008bfe0 - JpnTrial
-	// 8008d41c - EurRetail
-	// 80090490 - JpnRetail
+	// 8008d088
 	int ptrMPK; // maybe is `void*` instead of `int`
 
 	// 8008d08c
@@ -2984,34 +2457,20 @@ struct sData
 	// before passed to gGT for drawing
 	struct Level *ptrLevelFile;
 
-	// 8008b4f0 - Sep3
-	// 8008d090 - UsaRetail
-	// 8008bfe8 - JpnTrial
-	// 8008d424 - EurRetail
-	// 80090498 - JpnRetail
+	// 8008d090
 	void *PatchMem_Ptr;
 
-#if BUILD >= UsaRetail
 	// 8008d094 - size of PatchMem
 	int PatchMem_Size;
-#endif
 
-	// 8008b4f4 - Sep3
-	// 8008d098 - UsaRetail
-	// 8008bff0 - JpnTrial
-	// 8008d42c - EurRetail
-	// 800904a0 - JpnRetail
+	// 8008d098
 	// MEMPACK_PopToState(x)
 	int bookmarkID;
 
 	// 8008d09c
 	struct BigHeader *ptrBigfileCdPos_2;
 
-	// 8008b4fc -- SepReview
-	// 8008d0a0 -- UsaRetail
-	// 8008bff8 -- JpnTrial
-	// 8008d434 -- EurRetail
-	// 800904a8 -- JpnRetail
+	// 8008d0a0
 	// 1 for ready, 0 for not ready
 	char queueReady;
 
@@ -3020,13 +2479,10 @@ struct sData
 	char queueRetry;
 
 	// 8008d0a2
-	char queueLength;
-
-	// 8008d0a3
-	char UnusedPadding1;
+	s16 queueLength;
 
 	// 8008d0a4
-	// Naughty Dog name from Sep3
+	// Original Naughty Dog name
 	int load_inProgress;
 
 	// 8008d0a8
@@ -3035,15 +2491,10 @@ struct sData
 	// 8008D0AC
 	char s_FILE[8];
 
-// Eur and Jpn
-#if BUILD >= EurRetail
-	void *lngFile;
-#endif
-
 	// 8008D0B4
 	// used to get which lev file
 	// to load, depending on LOD
-	char levBigLodIndex[0x8];
+	u8 levBigLodIndex[0x8];
 
 	// 8008d0bc
 	int boolFirstBoot;
@@ -3086,8 +2537,7 @@ struct sData
 
 	} Loading;
 
-	// 8008d110 - UsaRetail
-	// 8008d4a8 - EurRetail
+	// 8008d110
 	int numLngStrings; // 0 in exe
 
 	// 8008d114
@@ -3107,9 +2557,6 @@ struct sData
 	char s_ndi_needToRename[4];
 	char s_garage1[8];
 
-#if BUILD == SepReview
-	char intro10[8];
-#endif
 
 	char s_intro9[8];
 	char s_intro8[8];
@@ -3155,31 +2602,14 @@ struct sData
 	// 8008d2a0
 	u16 finalLapTextTimer[4];
 
-#if BUILD >= UsaRetail
-	// 8008d2a8 -- UsaRetail
-	// 800906b4 -- JpnRetail
+	// 8008d2a8
 	s16 TurboDisplayPos_Only1P;
 	s16 numPlayersFinishedRace;
-#endif
 
-	// DoesNotExist -- Early June? PizzaHut USA
-	// DoesNotExist -- Late June? EuroDemo53
-	// 80084bd8 -- July? Usa Spyro2
-	// 80084df0 -- July? Eur Spyro2
-	// 80084dac -- July? Jpn D26
-	// 80089b34 -- Aug5
-
-	// 8008dec0 -- Aug14
-	// 8008b70c -- SepReview
-	// 8008d2ac -- UsaRetail
-	// 8008c204 -- JpnTrial
-	// 8008D644 -- EurRetail
-	// 800906b8 -- JpnRetail
+	// 8008d2ac
 	struct GameTracker *gGT; // real ND name
 
-	// 8008d2b0 -- UsaRetail
-	// 8008d648 -- EurRetail
-	// 800906bc -- JpnRetail
+	// 8008d2b0
 	struct GamepadSystem *gGamepads;
 
 	// draw the same frame twice in a row
@@ -3227,15 +2657,7 @@ struct sData
 	// 8008d2f0
 	int unk_RaceWheelConfig[3];
 
-	// something big changes between
-	// gGT and s_ot0 in Aug14
-
-	// 8008df7c -- Aug14
-	// 8008b75c -- SepReview
-	// 8008d2fc -- UsaRetail
-	// 8008c254 -- JpnTrial
-	// 8008D694 -- EurRetail
-	// 80090708 -- JpnRetail
+	// 8008d2fc
 	char s_ot0[8];
 	char s_ot1[8];
 	char s_PLAYER[8];
@@ -3266,10 +2688,7 @@ struct sData
 	char s_CAMR[8];
 	char s_HUD[4];
 
-	// 8008D3E0 -- UsaRetail
-	// 8008C338 -- JpnTrial
-	// 8008D778 -- EurRetail
-	// 800907EC -- JpnRetail
+	// 8008D3E0
 	char s_THUD[8];
 	char s_PAUSE[8];
 
@@ -3284,13 +2703,6 @@ struct sData
 
 	// 8008D400
 	int bool_IsLoaded_VlcTable;
-
-// This one is JpnTrial and beyond,
-// while the other "region" is EurRetail and beyond
-#if BUILD >= JpnTrial
-	// "_PAL" or "_JAPAN
-	char region[8];
-#endif
 
 	// ====== Should be memcard struct ================
 
@@ -3315,12 +2727,7 @@ struct sData
 
 	// ===================================================
 
-	// 8008e0bc -- Aug14
-	// 8008b880 -- SepReview
-	// 8008d420 -- UsaRetail
-	// 8008C380 -- JpnTrial
-	// 8008D7C0 -- EurRetail
-	// 80090834 -- JpnRetail
+	// 8008d420
 	struct Mempack *PtrMempack; // all good
 
 	// 8008d424
@@ -3334,7 +2741,8 @@ struct sData
 	s16 bossPathRequestPhase;
 
 	// 8008d42C
-	int bossJuiceCounter;
+	s16 bossJuiceCounter;
+	s16 padding_8008d42e;
 
 	// 8008d430
 	// -1 for no expansion
@@ -3345,20 +2753,15 @@ struct sData
 	// 8008d432
 	s16 battleSetupRowHighlighted;
 
-	// 0x80 for Sep3???
-
 	// 8008d434
-	int battleSetupWeaponHighlighted;
+	s16 battleSetupWeaponHighlighted;
+	s16 padding_8008d436;
 
 	// 8008d438 UI color data
 	u32 battleSetup_Color_UI_1;
 	u32 battleSetup_Color_UI_2;
 
-	// 8008b8a0 Sep3
-	// 8008d440 UsaRetail
-	// 8008c3a0 JpnTrial
-	// 8008d7e0 EurRetail
-	// 80090854 JpnRetail
+	// 8008d440
 	int RaceFlag_AnimationType;
 
 	// 8008d444
@@ -3367,68 +2770,38 @@ struct sData
 	// 8008d446
 	s16 RaceFlag_TransitionSpeed;
 
-	// 8008b8a8 Sep3
-	// 8008d448 UsaRetail
+	// 8008d448
 	s16 RaceFlag_CanDraw;
 
 	// 8008d44a
 	s16 RaceFlag_DrawInitialized;
 
-	// 8008b8ac Sep3
-	// 8008d44c UsaRetail
+	// 8008d44c
 	s16 RaceFlag_DrawOrder;
 	s16 padding_8008d44e;
 
-#if BUILD >= UsaRetail
 	// 8008d450
 	int RaceFlag_LoadingTextAnimFrame;
 
 	// 8008d454
 	int RaceFlag_Transition;
-#endif
 
-	// 8008b8b0 Sep3
-	// 8008d458 UsaRetail
-	// 8008c3b8 JpnTrial
-	// 8008d7f8 EurRetail
-	// 8009086c JpnRetail
+	// 8008d458
 	int RaceFlag_ElapsedTime;
 
-#if BUILD == SepReview
-	int RaceFlag_unknown;
-#endif
 
-	// 8008b8b8 Sep3
-	// 8008d45c UsaRetail
-	// 8008c3bc JpnTrial
-	// 8008d7fc EurRetail
-	// 80090870 JpnRetail
+	// 8008d45c
 	int RaceFlag_CopyLoadStage;
 
-	// 8008b8bc Sep3
-	// 8008d460 UsaRetail
-	// 8008c3c0 JpnTrial
-	// 8008d800 EurRetail
-	// 80090874 JpnRetail
-	u32 DrawSolidBoxData[3];
+	// 8008d460
+	Color DrawSolidBoxData[3];
 
 	char strcatData1_colon[4];
-#if BUILD == EurRetail
-	int strcatData2;
-#endif
 
-	// 8008b8cc Sep3
-	// 8008d470 UsaRetail
-	// 8008c3d0 JpnTrial
-	// 8008d814 EurRetail
-	// 80090884 JpnRetail
+	// 8008d470
 	void *ptrToMemcardBuffer1;
 
-	// 8008b8d0 Sep3
-	// 8008d474 UsaRetail
-	// 8008c3d4 JpnTrial
-	// 8008d818 EurRetail
-	// 80090888 JpnRetail
+	// 8008d474
 	// pointer to memcard bytes (again?) 800992E4
 	void *ptrToMemcardBuffer2;
 
@@ -3453,11 +2826,7 @@ struct sData
 	char stringFormat1[8];
 	char stringFormat2[4];
 
-	// 8008b8ec sep3
-	// 8008d490 UsaRetail
-	// 8008c3f0 JpnTrial
-	// 8008d834 EurRetail
-	// 800908a4 JpnRetail
+	// 8008d490
 	// grey color (80 80 80)
 	int greyColor;
 
@@ -3475,52 +2844,21 @@ struct sData
 	// when it cannot be selected, due to wrong track
 	int redColor;
 
-	// 8008b8fc sep3
-	// 8008d4a0 UsaRetail
-	// 8008c400 JpnTrial
-	// 8008d844 EurRetail
-	// 800908b4 JpnRetail
+	// 8008d4a0
 	int ghostIconColor;
 
-// 8008b900 sep3
-// 8008d4a4	usaRetail
-// 8008c404 jpnTrial
-// 8008d848 EurRetail
-// 800908b8	JpnRetail
-#if BUILD == SepReview
+	// 8008d4a4
 	char unk_BeforeTokenMenu[0x8];
 
-#elif BUILD == UsaRetail
-	char unk_BeforeTokenMenu[0x8];
-
-	// 8008b904 Sep3
-	// 8008d4ac UsaRetail
-	// -------- JpnTrial
-	// 8008d850 EurRetail
-	// 800908c4 JpnRetail
+	// 8008d4ac
 	char str_underscore[4];
 
-#elif BUILD == JpnTrial
-	char unk_BeforeTokenMenu[4];
-#elif BUILD == EurRetail
-	char unk_BeforeTokenMenu[0xC];
-#elif BUILD == JpnRetail
-	char unk_BeforeTokenMenu[0x10];
-#endif
 
-	// 8008b908 Sep3
-	// 8008d4b0 UsaRetail
-	// 8008c408 JpnTrial
-	// 8008d854 EurRetail
-	// 800908c8 JpnRetail
+	// 8008d4b0
 	// check if CTR Token/Relic adv menu is open or not
 	int boolOpenTokenRelicMenu;
 
-	// 8008b90c Sep3
-	// 8008d4b4 UsaRetail -- ptr to 8009ad18 (pushBuffer) for multiplayer wumpa
-	// 8008c40c JpnTrial
-	// 8008d858 EurRetail
-	// 800908cc JpnRetail
+	// 8008d4b4 -- ptr to 8009ad18 (pushBuffer) for multiplayer wumpa
 	int ptrPushBufferUI;
 
 	// 8008d4b8
@@ -3529,11 +2867,7 @@ struct sData
 	// 8008d4bc
 	int menuReadyToPass;
 
-	// 8008b918 -- SepReview
-	// 8008d4c0 -- UsaRetail
-	// 8008c418 -- JpnTrial
-	// 8008d864 -- EurRetail
-	// 800908d8 -- JpnRetail
+	// 8008d4c0
 	char s_token[8];
 	char s_relic1[8];
 	char s_key1[8];
@@ -3552,12 +2886,9 @@ struct sData
 
 	char s_Ln[4]; // L1, L2, L3...
 
-#if BUILD >= EurRetail
-	char t_r_g_v[0x10];
-#endif
 
 	char s_int[4];         // %d
-	char s_intDividing[8]; // %d/%d, or %d-%d, depend on build
+	char s_intDividing[8]; // %d/%d
 	char s_printDividing[4];
 	char s_longInt[4];
 	char s_spacebar[4];
@@ -3566,31 +2897,19 @@ struct sData
 	// 8008d52c
 	int framesSinceRaceEnded;
 
-// 8008d530
+	// 8008d530
 
-// same stuff, different order
-#if BUILD >= JpnTrial
-	char s_999[8];
-	char s_intSpace[4];
-	char s_str[4];
+	// same stuff, different order
 	char s_subtractLongInt[8];
 	char s_additionLongInt[8];
 	char s_subtractInt[4];
-
-#elif BUILD >= SepReview
-	char s_subtractLongInt[8];
-	char s_additionLongInt[8];
-	char s_subtractInt[4];
-#if BUILD == UsaRetail
 	char s_999[8];
 	char s_intSpace[4];
 	char s_str[4];
-#endif
-#endif
 
 	// 8008d554
-	// one for each player
-	int multiplayerWumpaHudData[4];
+	// 2P and 3P/4P render-to-texture viewports
+	RECT multiplayerWumpaHudData[2];
 
 	// 8008d564
 	struct
@@ -3607,14 +2926,13 @@ struct sData
 
 	} Battle_EndOfRace;
 
-	// 8008B9b8 -- SepReview
-	// 8008d570 -- UsaRetail
-	// 8008c4c8 -- JpnTrial
-	// 8008D924 -- EurRetail
-	// 80090998 -- JpnRetail
+	// 8008d570
 	// end of race Arcade Adventure
 	// counts 1 - 8 over a few seconds
-	int numIconsEOR;
+	s16 numIconsEOR;
+
+	// 8008d572
+	s16 unknown_8d572;
 
 	// 8d574
 	char s_additionInt[4];
@@ -3635,13 +2953,10 @@ struct sData
 	} UnlockBitIndex;
 
 	// 8008D590
-	int matrixTableBaked;
+	u8 matrixTableBaked;
+	u8 _pad_matrixTableBaked[3];
 
-	// 8008B9dc -- SepReview
-	// 8008D594 -- UsaRetail
-	// 8008c4EC -- JpnTrial
-	// 8008D948 -- EurRetail
-	// 800909BC -- JpnRetail
+	// 8008D594
 	char s_NOSCRUB[8];
 	char s_ROAD[8];
 	char s_SANDBAG[8];
@@ -3686,23 +3001,12 @@ struct sData
 
 	// ===== BSS Region ========
 
-	// 8008d668 - UsaRetail
-	// 8008da1c - EurRetail
+	// 8008d668
 	// used for RNG
-	union
-	{
-		struct RngDeadCoedState advRng;
-
-		struct
-		{
-			u32 const_0x30215400;
-			u32 const_0x493583fe;
-		};
-	};
+	struct RngDeadCoedState advRng;
 
 	// 8008d670
-	// once used to load path files (Spyro 2 demo),
-	// does nothing in retail game
+	// Unused path-file index
 	int lastPathIndex;
 
 	// 8008d674
@@ -3719,18 +3023,10 @@ struct sData
 	// will reach top speed after race starts at same time
 	u8 accelerateOrder[8];
 
-	// 8008bad0 -- SepReview
-	// 8008d688 -- UsaRetail
-	// 8008c5e0 -- JpnTrial
-	// 8008da3c -- EurRetail
-	// 80090ab0 -- JpnRetail
+	// 8008d688
 	struct NavFrame *nav_ptrFirstPoint;
 
-	// 8008bad4 -- SepReview
-	// 8008d68c -- UsaRetail
-	// 8008c5e4 -- JpnTrial
-	// 8008da40 -- EurRetail
-	// 80090ab4 -- JpnRetail
+	// 8008d68c
 	struct NavFrame *nav_ptrLastPoint;
 
 	// 8008d690
@@ -3739,11 +3035,7 @@ struct sData
 	// pointer to that driver goes here
 	struct Driver *bestRobotRank;
 
-	// 8008badc -- SepReview
-	// 8008d694 -- UsaRetail
-	// 8008c5ec -- JpnTrial
-	// 8008da48 -- EurRetail
-	// 80090abc -- JpnRetail
+	// 8008d694
 	int nav_NumPointsOnPath;
 
 	// 8008d698
@@ -3761,11 +3053,7 @@ struct sData
 
 	// ----------------------------
 
-	// 8008baf8 -- SepReview
-	// 8008d6b0 -- UsaRetail
-	// 8008c608 -- JpnTrial
-	// 8008da64 -- EurRetail
-	// 80090ad8 -- JpnRetail
+	// 8008d6b0
 	// 0 for parallel port
 	// 1 for CD
 	int boolUseDisc;
@@ -3802,28 +3090,22 @@ struct sData
 	// 8008d6d8
 	int countPass_CdTransferCallback;
 
-	// 8008bb24 -- SepReview
-	// 8008d6dc -- UsaRetail
+	// 8008d6dc
 	int xa_numTypes;
 
 	// 8008d6e0
 	int XA_Playing_Index; // 0 - 99
 
-	// 8008bb2c -- SepReview
-	// 8008d6e4 -- UsaRetail
+	// 8008d6e4
 	int XA_Playing_Category; // 0 - 4
 
-	// 8008bb30 -- SepReview
-	// 8008d6e8 -- UsaRetail
+	// 8008d6e8
 	struct XaSize *ptrArray_XaSize;
 
-#if BUILD >= UsaRetail
 	// 8008d6ec
 	int XA_PauseFrame;
-#endif
 
-	// 8008bb34 -- SepReview
-	// 8008d6f0 -- UsaRetail
+	// 8008d6f0
 	int XA_StartPos;
 
 	// 8008d6f4
@@ -3856,8 +3138,7 @@ struct sData
 	// 8008d718
 	int *ptrArray_XaCdPos; // maybe should be `struct XaSize*`?
 
-	// 8008bb60 sep3
-	// 8008d71c usaRetail
+	// 8008d71c
 	int *ptrArray_firstXaIndex;
 
 	// 8008d720
@@ -3868,15 +3149,14 @@ struct sData
 	// count fails of CdReadyCallback
 	int countFail_CdReadyCallback;
 
-	// 8008d728 -- UsaRetail,
+	// 8008d728
 	// adv flags that control door access
 	// & 1 for garage door + tiger temple
 	// & 2 for hub doors
 	// see 8001fc40
 	u32 doorAccessFlags;
 
-	// 8008bb70 -- sep3
-	// 8008d72c -- UsaRetail
+	// 8008d72c
 	// All these are related drawing debug strings
 	struct
 	{
@@ -3893,13 +3173,16 @@ struct sData
 	int unk_8008d73C_relatedToRowHighlighted;
 
 	// 8008d740
-	int boolGhostsDrawing;
+	b16 boolGhostsDrawing;
+	u16 padGhostsDrawing;
 
 	// 8008d744
-	int boolGhostTooBigToSave;
+	b16 boolGhostTooBigToSave;
+	u16 padGhostTooBigToSave;
 
 	// 8008d748
-	int ghostOverflowTextTimer;
+	s16 ghostOverflowTextTimer;
+	u16 padGhostOverflowTextTimer;
 
 	// 8008d74c
 	struct GhostTape *ptrGhostTape[2];
@@ -3908,13 +3191,14 @@ struct sData
 	struct GhostHeader *ptrGhostTapePlaying;
 
 	// 8008d758
-	int boolCanSaveGhost;
+	b16 boolCanSaveGhost;
+	u16 padCanSaveGhost;
 
 	// 8008d75c
-	int countSounds;
+	u16 countSounds;
+	u16 padCountSounds;
 
-	// 8008bba4 sep3
-	// 8008d760 usaRetail
+	// 8008d760
 	u16 curReverb;
 	u16 padCurReverb;
 
@@ -3925,14 +3209,16 @@ struct sData
 	int numAudioSectors;
 
 	// 8008d76c
-	int numAudioBanks;
+	u8 numAudioBanks;
+	u8 _pad_numAudioBanks[3];
 
 	// 8008d770
 	// spu address of some type
 	int audioAllocPtr;
 
 	// 8008d774
-	int bankLoadStage;
+	u8 bankLoadStage;
+	u8 _pad_bankLoadStage[3];
 
 	// 8008d778
 	int bankSectorOffset;
@@ -3959,7 +3245,6 @@ struct sData
 	int OptionSlider_BoolPlay;
 	int OptionSlider_Index;
 
-#if BUILD >= UsaRetail
 	// 8008d79c
 	s16 currentVolume;
 
@@ -3968,19 +3253,20 @@ struct sData
 
 	// 8008d79f
 	char boolStoringVolume;
-#endif
 
 	// 8008d7a0
 	int OptionSlider_soundID;
 
 	// 8008d7a4
-	int songLoadStage;
+	u8 songLoadStage;
+	u8 _pad_songLoadStage[3];
 
 	// 8008d7a8
 	int songSectorOffset;
 
 	// 8008d7ac
-	int vol_FX;
+	u8 vol_FX;
+	u8 _pad_vol_FX[3];
 
 	// 8008d7b0
 	struct CseqHeader *ptrCseqHeader;
@@ -3989,10 +3275,12 @@ struct sData
 	s16 *ptrCseqSongStartOffset;
 
 	// 8008d7b8
-	int vol_Music;
+	u8 vol_Music;
+	u8 padding_afterVolMusic[3];
 
 	// 8008d7bc
-	int vol_Voice;
+	u8 vol_Voice;
+	u8 _pad_vol_Voice[3];
 
 	// 8008d7c0
 	struct HowlHeader *ptrHowlHeader;
@@ -4006,7 +3294,8 @@ struct sData
 	char *ptrCseqSongData;
 
 	// 8008d7cc
-	int boolStereoEnabled;
+	u8 boolStereoEnabled;
+	u8 _pad_boolStereoEnabled[3];
 
 	// 8008d7d0
 	struct EngineFX *howl_metaEngineFX;
@@ -4029,8 +3318,7 @@ struct sData
 	// 8008d7e8
 	struct SampleInstrument *ptrCseqLongSamples;
 
-	// 8008bc2c sep3
-	// 8008d7ec usaRetail
+	// 8008d7ec
 	char boolCanPlayVoicelines;
 
 	// 8008d7ed
@@ -4039,8 +3327,7 @@ struct sData
 	// 8008d7ee
 	s16 voicelineCooldown;
 
-	// 8008bc30 sep3
-	// 8008d7f0 usaRetail
+	// 8008d7f0
 	AudioState audioState;
 
 	// 8008d7f2
@@ -4057,48 +3344,34 @@ struct sData
 	// 8008d7fa
 	s16 nTropyVoiceCount;
 
-// 8008d7fc
-#if BUILD >= UsaRetail
-	int boolNeedXASeek;
-#endif
+	// 8008d7fc
+	u8 boolNeedXASeek;
+	u8 _pad_boolNeedXASeek[3];
 
-	// 8008bc3c sep3
-	// 8008d800 UsaRetail -- end of sData (due to alignment)
+	// 8008d800 -- end of sData (due to alignment)
 	int bankCount;
 
-	// 8008bc40 sep3
-	// 8008d804 UsaRetail
+	// 8008d804
 	int bankPodiumStage;
 
-#if BUILD >= UsaRetail
-	// Sep3 loads bank 51 (0x33)
-	// UsaRetail loads bank 54 (0x36)
-	// but sep3 doesn't save bool
-
 	// 8008d808 (1)
-	int bankLoad54;
-#endif
+	// Loads bank 54 (0x36); retail accesses one byte and leaves the following padding untouched.
+	u8 bankLoad54;
+	u8 _pad_bankLoad54[3];
 
-	// 8008bc44 sep3
-	// 8008d80c usaRetail
+	// 8008d80c
 	int cseqBoolPlay;
 
-	// 8008bc48 sep3
-	// 8008d810 usaRetail
+	// 8008d810
 	// definitely unsigned, we can tell from assembly
 	// in Music_LowerVolume and Music_RaiseVolume
 	u32 cseqHighestIndex;
 
-	// 8008bc4c sep3
-	// 8008d814 usaRetail
+	// 8008d814
 	int cseqTempo;
 
-#if BUILD == SepReview
-	int unk8008bc50;
-#endif
 
-	// 8008bc54 sep3 -- FUN_8002d6c0
-	// 8008d818 usaRetail -- FUN_8002dc4c
+	// 8008d818 -- FUN_8002dc4c
 	int audioDefaults[9]; // maybe should be `char*[]` instead of `int[]`
 
 	// 8008d818
@@ -4113,7 +3386,6 @@ struct sData
 	// 8008d830
 	// 8008d835 audio state
 
-	// 8008bc78 sep3
 	// 8008d83c usaRetil
 	s16 levelLOD;
 	s16 levelID;
@@ -4130,16 +3402,10 @@ struct sData
 	// 8008d854
 	void *ptrHubAlloc;
 
-// 8008d858
-#if BUILD == UsaRetail || BUILD == JpnTrial // def not SepReview
+	// 8008d858
 	void *lngFile;
-#endif
 
-	// 8008bc94 -- SepReview
-	// 8008d85c -- UsaRetail
-	// 8008c7b4 -- JpnTrial
-	// 8008dc0c -- EurRetail
-	// 80090c80 -- JpnRetail
+	// 8008d85c
 
 	// Not used in decomp/General,
 	// replaced 3-part callback with 2-part callback
@@ -4150,10 +3416,12 @@ struct sData
 	struct Instance *instMaskHints3D;
 
 	// 8008d864
-	int boolOpenWheelConfig;
+	b16 boolOpenWheelConfig;
+	s16 padding_boolOpenWheelConfig;
 
 	// 8008d868
-	int WheelConfigOption;
+	s16 WheelConfigOption;
+	s16 padding_WheelConfigOption;
 
 	// 8008d86C
 	// same as ptrBigfileCdPos_2
@@ -4161,7 +3429,7 @@ struct sData
 
 	// 8008d870
 	// ptr to array of model pointers (real ND name)
-	int **PLYROBJECTLIST; // maybe should be `struct Model**`
+	struct Model **PLYROBJECTLIST;
 
 	// 8008d874
 	// activated in FUN_80035e20,
@@ -4171,66 +3439,39 @@ struct sData
 	s16 AkuAkuHintState;
 	s16 padding_AkuAkuHintState;
 
-	// 8008bcb0 -- SepReview
-	// 8008d878 -- UsaRetail
-	// 8008c7d0 -- JpnTrial
-	// 8008dc28 -- EurRetail
-	// 80090c9c -- JpnRetail
+	// 8008d878
 	char **lngStrings;
 
-	// 8008d87c -- UsaRetail
-	// 8008dc2c -- EurRetail
-	int gamepadID_OwnerRaceWheelConfig;
+	// 8008d87c
+	s16 gamepadID_OwnerRaceWheelConfig;
+	s16 padding_gamepadID_OwnerRaceWheelConfig;
 
-#if BUILD == EurRetail
-	// 8008dc30 -- EurRetail
-	// Initialized as false (0)
-	// if already set as true (1) before main menu,
-	// loads English as default and language menu is skipped
-	int boolLangChosen;
-#endif
 
-	// 8008bcb8 -- SepReview
-	// 8008d880 -- UsaRetail
-	// 8008c7d8 -- JpnTrial
-	// 8008dc34 -- EurRetail
-	// 80090ca4 -- JpnRetail
+	// 8008d880
 	RECT videoSTR_src_vramRect;
 
-	// 8008bcc0 -- SepReview
-	// 8008d888 -- UsaRetail
-	// 8008c7e0 -- JpnTrial
-	// 8008dc3c -- EurRetail
-	// 80090cac -- JpnRetail
+	// 8008d888
 	// used by 232, talking mask that gives hints
 	s16 boolDraw3D_AdvMask;
 	s16 padding_boolDraw3D_AdvMask;
 
-#if BUILD >= UsaRetail
-	// does not exist in SepReview
-	// 8008d88c -- UsaRetail
-	// 8008c7e4 -- JpnTrial
-	// 8008dc40 -- EurRetail
-	// 80090cb0 -- JpnRetail
+	// 8008d88c
 	// error message posY choice (0,1,2) (high, mid, low)
 	s16 errorMessagePosIndex;
 	s16 unk_aftererrormessageposindex;
-#endif
 
 	// 8008d890
 	int unk_8008d890;
 
 	// 8008d894
-	int raceWheelConfigOptionIndex;
+	s16 raceWheelConfigOptionIndex;
+	s16 padding_raceWheelConfigOptionIndex;
 
 	// 8008d898
-	int raceWheelConfigPageIndex;
+	s16 raceWheelConfigPageIndex;
+	s16 padding_raceWheelConfigPageIndex;
 
-	// 8008bcd0 -- SepReview
-	// 8008d89c -- UsaRetail
-	// 8008c7f4 -- JpnTrial
-	// 8008dc50 -- EurRetail
-	// 80090cc0 -- JpnRetail
+	// 8008d89c
 	int videoSTR_dst_vramX;
 
 	// 8008d8a0
@@ -4241,11 +3482,7 @@ struct sData
 	// 8008d8a4
 	int boolSoundPaused;
 
-	// 8008bcdc -- SepReview
-	// 8008d8a8 -- UsaRetail
-	// 8008c800 -- JpnTrial
-	// 8008dc5c -- EurRetail
-	// 80090ccc -- JpnRetail
+	// 8008d8a8
 	int memcardFileSize;
 
 	// 8008d8ac
@@ -4260,11 +3497,7 @@ struct sData
 	// 8008d8b8
 	int memcardSlot; // hard-coded ZERO
 
-	// 8008bcf0 -- SepReview
-	// 8008d8bc -- UsaRetail
-	// 8008c814 -- JpnTrial
-	// 8008dc70 -- EurRetail
-	// 80090ce0 -- JpnRetail
+	// 8008d8bc
 	int HwCARD_EvSpNEW;
 
 	// 8008d8c0
@@ -4292,11 +3525,7 @@ struct sData
 	// 8008d8dc
 	int HwCARD_EvSpTIMOUT;
 
-	// 8008bd14 -- SepReview
-	// 8008d8e0 -- UsaRetail
-	// 8008c838 -- JpnTrial
-	// 8008dc94 -- EurRetail
-	// 80090d04 -- JpnRetail
+	// 8008d8e0
 	int SwCARD_EvSpTIMOUT;
 
 
@@ -4304,33 +3533,20 @@ struct sData
 	// 8008d8e8 - pointer to boss weapon meta
 
 	// 8008d8e4
-	// UsaRetail JpnTrial EurRetail
-#if BUILD >= SepReview && BUILD <= EurRetail
-	int bossWeaponCooldown;
+	s16 bossWeaponCooldown;
+	s16 padding_8008d8e6;
 	struct MetaDataBOSS *bossWeaponMeta;
 	char data10_aaaaa[4];
 
-	// 8008d8f0 - Usa
-	u16 boolHasLoadedOptions;
+	// 8008d8f0
+	b16 boolHasLoadedOptions;
 
 	u16 typeTimer;
-#elif BUILD == JpnRetail
-	char data14_aaaaa[0x14];
-#endif
 
-	// 8008bd28 -- SepReview
-	// 8008d8f4 -- UsaRetail
-	// 8008c84c -- JpnTrial
-	// 8008dca8 -- EurRetail
-	// 80090d1c -- JpnRetail
+	// 8008d8f4
 	int ptrLoadSaveObj;
 
-// 8008bd24 -- SepReview
-// 8008d8f8 -- UsaRetail
-// 8008c850 -- JpnTrial
-// 8008dcac -- EurRetail
-// 80090d20 -- JpnRetail
-#if BUILD >= SepReview && BUILD <= EurRetail
+	// 8008d8f8
 
 	// ---
 	// 8008d904 - timerSaveComplete
@@ -4338,53 +3554,43 @@ struct sData
 	// --
 
 	struct SelectProfileRuntimeState selectProfileState;
-#elif BUILD == JpnRetail
-	char data14_bbb[0x14];
-#endif
 
-	// 8008bd3c -- SepReview
-	// 8008d908 -- UsaRetail
-	// 8008c860 -- JpnTrial
-	// 8008dcbc -- EurRetail
-	// 80090d34 -- JpnRetail
+	// 8008d908
 	struct RectMenu *ptrActiveMenu;
 
 	// 8008d90c
 	// Never used to detect dead menu
-	int framesRemainingInMenu;
+	s16 framesRemainingInMenu;
+	s16 padding_8008d90e;
 
 	// 8008d910
 	int unk_8008d910;
 
 	// 8008d914
-	int advCharSelectIndex_curr;
+	s16 advCharSelectIndex_curr;
+	s16 padding_8008d916;
 
-	// 8008bd4c -- SepReview
-	// 8008d918 -- UsaRetail
-	// 8008c870 -- JpnTrial
-	// 8008dccc -- EurRetail
-	// 80090d44 -- JpnRetail
-	int boolSaveCupProgress;
+	// 8008d918
+	b16 boolSaveCupProgress;
+	s16 _pad_boolSaveCupProgress;
 
 	// 8008d91c
-	int advCharSelectIndex_prev;
+	s16 advCharSelectIndex_prev;
+	s16 padding_8008d91e;
 
 	// 8008d920
-	int uselessLapRowCopy;
+	u16 uselessLapRowCopy;
+	s16 padding_8008d922;
 
-	// 8008d924 -- UsaRetail
-	// 8008dcd8 -- EurRetail
+	// 8008d924
 	// Becomes nullptr after ptrActiveMenu is set
 	struct RectMenu *ptrDesiredMenu;
 
 	// 8008d928
-	char unk_memcardRelated_8008d928[0x8];
+	b16 unk_memcardRelated_8008d928;
+	char padding_8008d92a[0x6];
 
-	// 8008bd64 -- SepReview
-	// 8008d930 -- UsaRetail
-	// 8008c888 -- JpnTrial
-	// 8008dce4 -- EurRetail
-	// 80090d5C -- JpnRetail
+	// 8008d930
 	u16 trackSelBackup;
 	s16 padding_8008d932;
 
@@ -4398,15 +3604,16 @@ struct sData
 	// Must be some unused placeholder,
 	// both 0x236 and 0x237 are the same
 	// "Save your cup progress?"
-	int stringIndexSaveCupProgress;
+	s16 stringIndexSaveCupProgress;
+	s16 _pad_stringIndexSaveCupProgress;
 
 	// 8008d93c
 	int unk_lala[2];
 
 	// 8008d944
-	// 0 for outdated
-	// 1 for this version
-	int boolMemcardDataValid;
+	// Nonzero when the saved header is from an incompatible version.
+	b16 boolMemcardDataOutdated;
+	u16 padding_8008d946;
 
 	// 8008d948
 	Color menuRowHighlight_Green;
@@ -4414,45 +3621,34 @@ struct sData
 	// 8008d94c
 	Color menuRowHighlight_Normal;
 
-// somewhere
-// after data8_zzzz
-// before AnyPlayerTap
-#if BUILD == JpnRetail
-	char data_beforeAnyTap[0x4];
-#endif
-
-	// 8008bd84 -- SepReview
-	// 8008d950 -- UsaRetail
-	// 8008c8a8 -- JpnTrial
-	// 8008dd04 -- EurRetail
-	// 80090d80 -- JpnRetail
+	// 8008d950
 	int AnyPlayerTap;
 
-	// 8008d954 - UsaRetail
-	// 8008dd08 - EurRetail
+	// 8008d954
 	struct RectMenu *activeSubMenu;
 
-	// 8008bd8c -- SepReview
-	// 8008d958 -- UsaRetail
-	// 8008c8b0 -- JpnTrial
-	// 8008dD0C -- EurRetail
-	// 80090d88 -- JpnRetail
-	int boolReplayHumanGhost;
+	// 8008d958
+	b16 boolReplayHumanGhost;
+	s16 padding_8008d95a;
 
 	// 8008d95c
-	int unk8008d95c;
+	b16 unk8008d95c;
+	s16 padding_8008d95e;
 
 	// 8008d960
-	char teamOfEachPlayer[4];
+	s8 teamOfEachPlayer[4];
 
 	// 8008d964
-	int unk8008d964;
+	b16 unk8008d964;
+	s16 padding_8008d966;
 
 	// 8008d968
-	int boolAdvProfilesChecked;
+	b16 boolAdvProfilesChecked;
+	s16 padding_8008d96a;
 
 	// 8008d96c
-	int advProfileIndex;
+	s16 advProfileIndex;
+	s16 padding_8008d96e;
 
 	// 8008d970
 	// frame timer for color animation:
@@ -4462,16 +3658,13 @@ struct sData
 	//	etc
 	int frameCounter;
 
-	// 8008bda8 -- SepReview
-	// 8008d974 -- UsaRetail
-	// 8008c8cc -- JpnTrial
-	// 8008dd28 -- EurRetail
-	// 80090da4 -- JpnRetail
+	// 8008d974
 	int AnyPlayerHold;
 
 	// 8008d978
 	// saving, loading, or deleting
-	int memcardAction;
+	s16 memcardAction;
+	u16 padding_8008d97a;
 
 	// 8008d97C
 	MainMenuState mainMenuState;
@@ -4481,7 +3674,8 @@ struct sData
 	int demoModeIndex;
 
 	// 8008d984
-	int boolError;
+	b16 boolError;
+	s16 padding_8008d986;
 
 	// 8008d988
 	// root counter
@@ -4503,23 +3697,11 @@ struct sData
 	// 8008d9b0
 	int relicTime_1min;
 
-	// 8008bde8 -- SepReview
-	// 8008d9b4 -- UsaRetail
-	// 8008c90c -- JpnTrial
-	// 8008dd68 -- EurRetail
-	// 80090de4 -- JpnRetail
+	// 8008d9b4
 	struct Instance *ptrRelic;
 
-#if BUILD == JpnRetail
-	// 80090de8 -- JpnRetail
-	char jpnFiller8[8];
-#endif
 
-	// 8008bdec -- SepReview
-	// 8008d9b8 -- UsaRetail
-	// 8008c910 -- JpnTrial
-	// 8008dd6C -- EurRetail
-	// 80090df0 -- JpnRetail
+	// 8008d9b8
 	int relicTime_1ms;
 
 	// 8008d9bc
@@ -4537,30 +3719,19 @@ struct sData
 	// 8008d9cc
 	struct Instance *ptrHudC;
 
-	// 8008be04 -- SepReview
-	// 8008d9d0 -- UsaRetail
-	// 8008c928 -- JpnTrial
-	// 8008dd84 -- EurRetail
-	// 80090e08 -- JpnRetail
+	// 8008d9d0
 	struct Instance *ptrToken;
 
 	// 8008d9d4
 	int relicTime_10ms;
 
-#if BUILD == JpnRetail
-	// 8009de10 -- JpnRetail
-	char fillerJap8[8];
-#endif
 
-	// 8008be0c -- SepReview
-	// 8008d9d8 -- UsaRetail
-	// 8008c930 -- JpnTrial
-	// 8008dd8c -- EurRetail
-	// 80090e18 -- JpnRetail
+	// 8008d9d8
 	struct Instance *ptrTimebox1;
 
 	// 8008d9dc
-	int WrongWayDirection_bool;
+	u8 WrongWayDirection_bool;
+	u8 _pad_WrongWayDirection_bool[3];
 
 	// 8008d9e0
 	int relicTime_10sec;
@@ -4572,27 +3743,13 @@ struct sData
 	int relicTime_1sec;
 
 	// 8008d9ec
-	union
-	{
-		s16 vehicleCrashRotScratchRaw[4];
-		struct
-		{
-			SVec3 botCrashNavRot;
-			s16 botCrashNavRotPadding;
-		};
-	};
+	SVec3 botCrashNavRot;
+	s16 botCrashNavRotPadding;
 
 	// 8008d9f4
-	union
-	{
-		int vehicleTalkMaskScratchRaw[3];
-		struct
-		{
-			int vehicleCollisionImpactStrength;
-			int talkMaskXASamplePeak;
-			int talkMaskMaxMouthFrame;
-		};
-	};
+	int vehicleCollisionImpactStrength;
+	int talkMaskXASamplePeak;
+	int talkMaskMaxMouthFrame;
 
 	// 8008da00
 	u8 talkMask_boolDead;
@@ -4603,20 +3760,7 @@ struct sData
 	// entry func might be called start() in ghidra output
 	int entryRA;
 
-// Somewhere
-// after ptrTimebox1
-// before "m1"
-#if BUILD == JpnRetail
-	char data_beforeMatrixM1[0x30];
-#elif BUILD == JpnTrial
-	char data_beforeMatrixM1[0x10];
-#endif
-
-	// 8008be3c -- SepReview
-	// 8008da08 -- UsaRetail
-	// 8008c970 -- JpnTrial
-	// 8008ddbc -- EurRetail
-	// 80090e78 -- JpnRetail
+	// 8008da08
 	MATRIX rotXYZ;
 
 	// 8008da28
@@ -4630,26 +3774,14 @@ struct sData
 	// pointer at 8008cf74
 	s16 cupDiff[0xE];
 
-	// 8008beb4 -- SepReview
-	// 8008da80 -- UsaRetail
-	// 8008c9e8 -- JpnTrial
-	// 8008de34 -- EurRetail
-	// 80090ef0 -- JpnRetail
+	// 8008da80
 	struct NavHeader blank_NavHeader;
 	struct NavFrame blank_NavFrame;
 
-	// 8008bf14 -- SepReview
-	// 8008dae0 -- UsaRetail
-	// 8008ca48 -- JpnTrial
-	// 8008de94 -- EurRetail
-	// 80090f50 -- JpnRetail
+	// 8008dae0
 	struct NavFrame *NavPath_ptrNavFrameArray[3];
 
-	// 8008bf20 -- SepReview
-	// 8008daec -- UsaRetail
-	// 8008ca54 -- JpnTrial
-	// 8008dea0 -- EurRetail
-	// 80090f5c -- JpnRetail
+	// 8008daec
 	struct NavHeader *NavPath_ptrHeader[3];
 
 	// 8008daf8
@@ -4661,17 +3793,9 @@ struct sData
 	// 8008db48: lev -> mesh_info
 
 
-// 8008c15c -- SepReview
-// 8008dD28 -- UsaRetail
-// 8008cc90 -- JpnTrial
-// 8008e0dc -- EurRetail
-// 80091198 -- JpnRetail
-// see FUN_8001c8e4
-#if BUILD == SepReview
-	char SpuDecodedBuf[0x1000];
-#elif BUILD >= UsaRetail
-	char SpuDecodedBuf[0x800];
-#endif
+	// 8008dd28
+	// Decoded CD left/right channels, each containing 512 signed samples.
+	s16 SpuDecodedBuf[0x400];
 
 	// 8008E528
 	// 400 bytes, 100 ints
@@ -4683,64 +3807,23 @@ struct sData
 	// 8008e6c8 array of 3 ints
 	int XA_MaxSampleValArr[3];
 
-#if BUILD == SepReview
-	// 8008d308
-	char tombstoneData[0x80];
-#endif
 
-	// 8008d388 - SepReview
-	// 8008e6d4 - UsaRetail
-	// 8008d63c - JpnTrial
-	// 8008ea88 - EurRetail
-	// 80091b44 - JpnRetail
+	// 8008e6d4
 	DISPENV blank_debug_DispEnv;
 
-#if BUILD == JpnTrial || BUILD == JpnRetail
-	// 8008d650 -- JpnTrial
-	// icon struct used for DrawLineStrlen in the japanese builds
-	struct Icon font_icon;
-	// TextureLayout structs for the two japanese font icon groups, and the 0x18th icon in the small group
-	struct TextureLayout font_jfontBigIconData;
-	struct TextureLayout font_jfontSmallIconData;
-	struct TextureLayout font_jfontSmall0x18IconData;
-#endif
 
-	// size 0x1494
-	// High Score System
-	// 8008fbe8 -- Aug14 (maybe)
-	// 8008D39C -- SepReview
-	// 8008e6e8 -- UsaRetail
-	// 8008d694 -- JpnTrial
-	// 8008ea9c -- EurRetail
-	// 80091b9c -- JpnRetail
-	struct GameProgress gameProgress;
-
-// this is also in earlier builds,
-// except moved after AdvProgress
-#if BUILD >= UsaRetail
-	// 8008FB7C
-	struct GameOptions gameOptions;
-#endif
+	// 8008e6e8: progress (0x1494 bytes), then options at 8008fb7c.
+	struct GameSave gameSave;
 
 	// double-check these, address starts
 	// 0x18 bytes from "name", not 0x20
-	// 8008e830 -- sep3
-	// 8008fba4 -- usaRetail
-	// 8008eb50 -- jpnTrial
-	// 8008ff58 -- eurRetail
-	// 80091b9c -- jpnRetail
+	// 8008fba4
 	// Adv Profile system
 	struct AdvProgress advProgress;
 
-// same as above (before AdvProgress)
-#if BUILD == SepReview
-	struct GameOptions gameOptions;
-#endif
-
-	// 8008e8a4 -- sep3
-	// 8008fbf4 -- usaRetail
+	// 8008fbf4
 	// Ghost system
-	struct
+	struct GhostRecording
 	{
 		// 8008fbf4
 		// Start of entire ghost,
@@ -4761,47 +3844,42 @@ struct sData
 		char *ptrCurrOffset;
 
 		// DAT_8008fc04
-		// Used to update velocity
-		// every 8 frames
-		int countEightFrames;
+		// Emit a movement sample every eight frames.
+		s32 frameCount;
 
 		// DAT_8008fc08
-		// 0x80 message once every 16 frames
-		int countSixteenFrames;
+		// Emit an absolute position at least every 32 movement samples.
+		s32 sampleCount;
 
 		// 8008fc0c
-		int timeOfLast80buffer;
+		s32 lastPositionPacketTimeMS;
 
 		// 8008fc10
-		int timeElapsedInRace;
+		s32 timeElapsedInRace;
 
 		// 8008fc14
-		int boostCooldown1E;
+		s32 turboPadBoostCooldownFrames;
 
 		// 8008fc18
-		s16 VelX;
+		s16 lastSampledPositionX;
 
 		// 8008fc1a
-		s16 VelY;
+		s16 lastSampledPositionY;
 
 		// 8008fc1C
-		s16 VelZ;
+		s16 lastSampledPositionZ;
 
 		// 8008fc1e
 		s16 unk_8fc1e;
 
 		// 8008fc20
-		int animFrame;
-		int animIndex;
+		s32 animFrame;
+		s32 animIndex;
 		u32 instanceFlags;
 
 	} GhostRecording;
 
-	// 8008e8dc -- SepReview
-	// 8008fc2C -- UsaRetail
-	// 8008ebd8 -- JpnTrial
-	// 8008ffe0 -- EurRetail
-	// 800930e0 -- JpnRetail
+	// 8008fc2C
 	struct Bank bank[8];
 
 #define NUM_SFX_CHANNELS 24
@@ -4891,74 +3969,34 @@ struct sData
 	// 800962c4 and 800962d4
 	struct SoundFadeInput SoundFadeInput[2];
 
-#if BUILD >= UsaRetail
 	// 800962E4
 	// eight members, each 0xc
 	struct GarageFX garageSoundPool[8];
-#endif
 
-	// 80094f94 -- SepReview
-	// 80096344 -- UsaRetail
-	// 800952f0 -- JpnTrial
-	// 800966f8 -- EurRetail
-	// 800997f8 -- JpnRetail
+	// 80096344
 	struct LoadQueueSlot queueSlots[LOAD_QUEUE_SLOT_COUNT];
 
 	// 80096404
 	// filler
 
-#if BUILD == SepReview
-
-	// are there really extra quadblocks?
-	// or are there 24 (dec) extra bytes?
-	// 0x106 (256+6) is not divisible by four
-	struct QuadBlock *quadBlocksRendered[0x106];
-
-#elif BUILD >= UsaRetail
 
 	// 64 quadblocks per player, 256 total
 	struct QuadBlock *quadBlocksRendered[0x100];
 
-#endif
 
-	// 8009546C -- SepReview
-	// 80096804 -- UsaRetail
-	// 800957B0 -- JpnTrial
-	// 80096BB8 -- EurRetail
-	// 80099CB8 -- JpnRetail
+	// 80096804
 	struct GamepadSystem gamepadSystem;
 
-	// 800a4598 -- Early June? PizzaHut USA
-	// 80099650 -- Late June? EuroDemo53
-	// 80091560 -- July? Usa Spyro2
-	// 80091790 -- July? Eur Spyro2
-	// 80091738 -- July? Jpn D26
-	// 8008E308 -- AugReview
-
-	// 80092880 -- Aug14
-	// 80095740 -- SepReview
-	// 80096b20 -- UsaRetail
-	// 80095ACC -- JpnTrial
-	// 80096ED8 -- EurRetail
-	// 80099FD8 -- JpnRetail
+	// 80096b20
 	struct GameTracker gameTracker;
 
-	// 80097C38 -- SepReview
-	// 800990A4 -- UsaRetail
-	// 80098058 -- JpnTrial
-	// 8009946C -- EurRetail
-	// 8009C56C -- JpnRetail
+	// 800990A4
 	char s_memcardFileCurr[0x20];
 
 	// 800990c4
 	char s_memcardFindGhostFile[0x20];
 
-	// 80094d68 -- Aug14
-	// 80097C78 -- SepReview
-	// 800990E4 -- UsaRetail
-	// 80098098 -- JpnTrial
-	// 800994AC -- EurRetail
-	// 8009C5AC -- JpnRetail
+	// 800990E4
 	struct Mempack mempack[4]; // each is 0x60 bytes
 
 	// 80099264 (time string at end of time trial race)
@@ -4991,111 +4029,13 @@ struct sData
 	// 4 profiles, 3 instances per profile, 0x90 bytes total
 	struct SelectProfileLoadSaveIcon LoadSaveData[12];
 
-	// 0x8009AA30
-	// & 1: frame2->frame1
-	int memcardUnk1;
-
-	// result
-
-	// 8009AA34 (MC_RESULT)
-	s16 desired_memcardResult;
-
-	// 8009aa36 (MC_ACTION)
-	s16 frame1_memcardAction;
-
-	// 8009aa38
-	s16 frame1_memcardSlot;
-
-	// 8009aa3a
-	s16 frame2_memcardAction;
-
-	// 8009aa3c
-	s16 frame2_memcardSlot;
-
-	// 8009aa3e
-	s16 frame3_memcardAction;
-
-	// 8009aa40
-	s16 frame3_memcardSlot;
-
-	// 8009aa42
-	s16 frame4_memcardAction;
-
-	// 8009aa44
-	s16 frame4_memcardSlot;
-
-	s16 padding8009aa46;
-
-	// 8009aa48
-	char *ghostProfile_fileName;
-
-	// 8009aa4c
-	char *ghostProfile_fileIconHeader;
-
-	// 8009aa50
-	// Points to Destination (ghost load)
-	// Points to Source (ghost save)
-	struct GhostHeader *ghostProfile_ptrGhostHeader;
-
-	// 8009aa54 -- Size (saving = 3E00)
-	s16 ghostProfile_size3E00;
-
-	// 8009aa56
-	// only set for one frame,
-	// then resets to -1
-	s16 ghostProfile_rowSelect;
-
-	// 8009aa58
-	s16 ghostProfile_indexSave;
-
-	// 8009aa5a
-	s16 ghostProfile_indexLoad;
-
-	// 8009aa5c
-	int numGhostProfilesSaved;
-
-	// 8009aa60
-	struct GhostProfile ghostProfile_memcard[7];
-
-	// 8009ABCC
-	struct GhostProfile ghostProfile_current;
+	// 0x8009aa30..0x8009ac00
+	struct MemcardState memcard;
 
 	// 8009AC00
-	struct
-	{
-		// 8009AC00
-		// 0x:00:00
-		int p1_Min1s[7];
-		int p2_Min1s[7];
+	struct UILapTimes LapTimes;
 
-		// 8009AC38
-		// 00:00:x0
-		int p1_Ms10s[7];
-		int p2_Ms10s[7];
-
-		// 8009ac70
-		// 00:00:0x
-		int p1_Ms1s[7];
-		int p2_Ms1s[7];
-
-		// 8009aca8
-		// 00:x0:00
-		int p1_Sec10s[7];
-		int p2_Sec10s[7];
-
-		// 8009ace0
-		// 00:0x:00
-		int p1_Sec1s[7];
-		int p2_Sec1s[7];
-
-	} LapTimes;
-
-	// 80096920 - Aug14 	-- 1BB8 from mempack
-	// 8009987c - Sep3		-- 1c04 from mempack
-	// 8009ad18 - UsaRetail	-- 1c34 from mempack
-	// 80099ccc - JpnTrial	-- 1c34 from mempack
-	// 8009b0e0 - EurRetail	-- 1c34 from mempack
-	// 8009e208 - JpnRetail	-- 1c54 from mempack
+	// 8009ad18 -- 1c34 from mempack
 
 	// 8009AD18 - pushBuffer_DecalMP
 	struct PushBuffer pushBuffer_DecalMP;
@@ -5110,23 +4050,14 @@ struct sData
 	// 8009AE58 start of psyq lib data
 #endif
 
-// 8009AE28 - UsaRetail
-#if BUILD == UsaRetail || BUILD == EurRetail
+	// 8009AE28
 	char dataLibFiller[0x30];
-#elif BUILD == JpnTrial
-	char dataLibFiller[0x2C];
-#elif BUILD == JpnRetail
-	char dataLibFiller[0x58];
-#endif
 
 	// after dataLibFiller is 8009AE58,
 	// where psyq allocates globals
 
 	// Address of Crystal Challenge end of race
-	// 8009f710 -- UsaRetail
-	// 8009e6c4 -- JpnTrial
-	// 8009fad8 -- EurRetail
-	// 800a2c00 -- JpnRetail
+	// 8009f710
 
 	// 8009f6fc end of BSS
 
@@ -5161,10 +4092,20 @@ extern struct BSS bss;
 
 #ifndef CTR_NATIVE
 // optimal use for modding
-register struct sData *sdata asm("$gp");
+register struct sData *sdata asm("gp");
 #else
 struct sData *sdata = &sdata_static;
 #endif
+
+CTR_STATIC_ASSERT(sizeof(struct MetaDataCHAR) == 0x10);
+CTR_STATIC_ASSERT(offsetof(struct MetaDataCHAR, iconID) == 0x8);
+CTR_STATIC_ASSERT(sizeof(((struct MetaDataCHAR *)0)->iconID) == 0x2);
+CTR_STATIC_ASSERT(offsetof(struct MetaDataCHAR, engineID) == 0xc);
+CTR_STATIC_ASSERT(offsetof(struct sData, multiplayerWumpaHudData) == 0x5e8);
+CTR_STATIC_ASSERT(offsetof(struct sData, Battle_EndOfRace) == 0x5f8);
+CTR_STATIC_ASSERT(offsetof(struct sData, numIconsEOR) == 0x604);
+CTR_STATIC_ASSERT(sizeof(((struct sData *)0)->numIconsEOR) == 0x2);
+CTR_STATIC_ASSERT(offsetof(struct sData, s_additionInt) == 0x608);
 
 // OVR1
 // 8009f6fc - 800a0cb8
@@ -5190,43 +4131,57 @@ CTR_STATIC_ASSERT(offsetof(struct Terrain, groundFrictionScale) == 0x20);
 CTR_STATIC_ASSERT(offsetof(struct Terrain, turnAngleScale) == 0x24);
 CTR_STATIC_ASSERT(offsetof(struct Terrain, turnResponseScale) == 0x28);
 CTR_STATIC_ASSERT(offsetof(struct Terrain, skidSound) == 0x30);
-CTR_STATIC_ASSERT(offsetof(struct Terrain, botSpeedFlags) == 0x36);
-CTR_STATIC_ASSERT(offsetof(struct Terrain, botTargetSpeedScale) == 0x38);
-CTR_STATIC_ASSERT(offsetof(struct Terrain, botAccelerationScale) == 0x3a);
+CTR_STATIC_ASSERT(offsetof(struct Terrain, bot.fields.speedFlags) == 0x36);
+CTR_STATIC_ASSERT(offsetof(struct Terrain, bot.fields.targetSpeedScale) == 0x38);
+CTR_STATIC_ASSERT(offsetof(struct Terrain, bot.fields.accelerationScale) == 0x3a);
 CTR_STATIC_ASSERT(offsetof(struct Terrain, botFrictionScale) == 0x3c);
 CTR_STATIC_ASSERT(offsetof(struct Terrain, padding_0x3e) == 0x3e);
-CTR_STATIC_ASSERT(sizeof(((struct Terrain *)0)->botSpeedFlags) == 0x2);
-CTR_STATIC_ASSERT(sizeof(((struct Terrain *)0)->botTargetSpeedScale) == 0x2);
-CTR_STATIC_ASSERT(sizeof(((struct Terrain *)0)->botAccelerationScale) == 0x2);
+CTR_STATIC_ASSERT(sizeof(((struct Terrain *)0)->bot.fields.speedFlags) == 0x2);
+CTR_STATIC_ASSERT(sizeof(((struct Terrain *)0)->bot.fields.targetSpeedScale) == 0x2);
+CTR_STATIC_ASSERT(sizeof(((struct Terrain *)0)->bot.fields.accelerationScale) == 0x2);
 CTR_STATIC_ASSERT(sizeof(((struct Terrain *)0)->botFrictionScale) == 0x2);
 CTR_STATIC_ASSERT(sizeof(struct Scrub) == 0x10);
 CTR_STATIC_ASSERT(sizeof(ScrubFlags) == 0x4);
 CTR_STATIC_ASSERT(sizeof(TerrainFlags) == 0x4);
 CTR_STATIC_ASSERT(sizeof(TerrainBotFlags) == 0x2);
-CTR_STATIC_ASSERT(TERRAIN_FLAG_RAISE_GROUND_OFFSET == 0x1);
-CTR_STATIC_ASSERT(TERRAIN_FLAG_ACCEL_WHILE_REVERSE_SLIDING == 0x4);
-CTR_STATIC_ASSERT(TERRAIN_FLAG_FORCE_SKIDMARKS == 0x8);
-CTR_STATIC_ASSERT(TERRAIN_FLAG_SKIP_TURN_ASSIST == 0x10);
-CTR_STATIC_ASSERT(TERRAIN_FLAG_ONESHOT_GROUND_SOUND == 0x20);
-CTR_STATIC_ASSERT(TERRAIN_FLAG_LANDING_SPARKS == 0x40);
-CTR_STATIC_ASSERT(TERRAIN_FLAG_MUD_PHYSICS == 0x80);
-CTR_STATIC_ASSERT(TERRAIN_FLAG_SIDESLIP_FRICTION == 0x100);
-CTR_STATIC_ASSERT(TERRAIN_BOT_FLAG_DECEL_TO_TARGET_SPEED == 0x80);
-CTR_STATIC_ASSERT(SCRUB_FLAG_APPLY_IMPACT == 0x1);
-CTR_STATIC_ASSERT(SCRUB_FLAG_SLAM_ON_HARD_IMPACT == 0x2);
-CTR_STATIC_ASSERT(SCRUB_FLAG_SKIP_WALL_RUB_TIMER == 0x4);
-CTR_STATIC_ASSERT(SCRUB_FLAG_KEEP_RESERVES == 0x8);
 CTR_STATIC_ASSERT(offsetof(struct Scrub, flags) == 0x4);
 CTR_STATIC_ASSERT(offsetof(struct Scrub, speedLimit) == 0x8);
 CTR_STATIC_ASSERT(offsetof(struct Scrub, impactAngle) == 0xC);
 CTR_STATIC_ASSERT(sizeof(struct MetaDataLEV) == 0x18);
 CTR_STATIC_ASSERT(sizeof(struct MetaDataMODEL) == 0xC);
 
-#if BUILD == UsaRetail
-#define OFFSETOF_SDATA(ELEMENT) ((u32)0x8008cf6c + OFFSETOF(struct sData, ELEMENT))
-#define OFFSETOF_DATA(ELEMENT)  ((u32)0x800809a0 + OFFSETOF(struct Data, ELEMENT))
+#define OFFSETOF_SDATA(ELEMENT)           ((u32)0x8008cf6c + OFFSETOF(struct sData, ELEMENT))
+#define OFFSETOF_DATA(ELEMENT)            ((u32)0x800809a0 + OFFSETOF(struct Data, ELEMENT))
 
-CTR_STATIC_ASSERT(OFFSETOF_DATA(rowsQuit[0]) == 0x800841BC);
+// NOTE(aalhendi): The retail memcard assembly uses $gp-relative operands.
+// Keep their displacements tied to the shared layouts, including the icon's
+// data-relative address, so a layout edit cannot silently change their meaning.
+#define CTR_MEMCARD_GP_STAGE              1176
+#define CTR_MEMCARD_GP_BUFFER             1180
+#define CTR_MEMCARD_GP_RETRIES            1188
+#define CTR_MEMCARD_GP_FILE_SIZE          2364
+#define CTR_MEMCARD_GP_FREE_BYTES         2368
+#define CTR_MEMCARD_GP_CHECKSUM_INDEX     2372
+#define CTR_MEMCARD_GP_SLOT               2380
+#define CTR_MEMCARD_GP_STATUS_FLAGS       2400
+#define CTR_MEMCARD_GP_CHECKSUM_STATUS    2404
+#define CTR_MEMCARD_GP_ICON_SIZE          2412
+#define CTR_MEMCARD_ICON_HAND_DATA_OFFSET 0x4e00
+
+CTR_STATIC_ASSERT(offsetof(struct sData, memcard_stage) == CTR_MEMCARD_GP_STAGE);
+CTR_STATIC_ASSERT(offsetof(struct sData, memcard_ptrStart) == CTR_MEMCARD_GP_BUFFER);
+CTR_STATIC_ASSERT(offsetof(struct sData, memcard_remainingAttempts) == CTR_MEMCARD_GP_RETRIES);
+CTR_STATIC_ASSERT(offsetof(struct sData, memcardFileSize) == CTR_MEMCARD_GP_FILE_SIZE);
+CTR_STATIC_ASSERT(offsetof(struct sData, memoryCard_SizeRemaining) == CTR_MEMCARD_GP_FREE_BYTES);
+CTR_STATIC_ASSERT(offsetof(struct sData, crc16_checkpoint_byteIndex) == CTR_MEMCARD_GP_CHECKSUM_INDEX);
+CTR_STATIC_ASSERT(offsetof(struct sData, memcardSlot) == CTR_MEMCARD_GP_SLOT);
+CTR_STATIC_ASSERT(offsetof(struct sData, memcardStatusFlags) == CTR_MEMCARD_GP_STATUS_FLAGS);
+CTR_STATIC_ASSERT(offsetof(struct sData, crc16_checkpoint_status) == CTR_MEMCARD_GP_CHECKSUM_STATUS);
+CTR_STATIC_ASSERT(offsetof(struct sData, memcardIconSize) == CTR_MEMCARD_GP_ICON_SIZE);
+CTR_STATIC_ASSERT(offsetof(struct Data, memcardIcon_PsyqHand) == CTR_MEMCARD_ICON_HAND_DATA_OFFSET);
+
+CTR_STATIC_ASSERT(OFFSETOF_SDATA(memcard) == 0x8009aa30);
+CTR_STATIC_ASSERT(OFFSETOF_DATA(rowsQuit) == 0x800841BC);
 CTR_STATIC_ASSERT(OFFSETOF_DATA(menuQuit) == 0x800841D0);
 CTR_STATIC_ASSERT(OFFSETOF_DATA(playerIconAdvMap) == 0x80086418);
 CTR_STATIC_ASSERT(OFFSETOF_SDATA(AkuAkuHintState) == 0x8008D874);
@@ -5235,6 +4190,5 @@ CTR_STATIC_ASSERT(OFFSETOF_SDATA(botCrashNavRot) == 0x8008D9EC);
 CTR_STATIC_ASSERT(OFFSETOF_SDATA(vehicleCollisionImpactStrength) == 0x8008D9F4);
 CTR_STATIC_ASSERT(OFFSETOF_SDATA(talkMaskXASamplePeak) == 0x8008D9F8);
 CTR_STATIC_ASSERT(OFFSETOF_SDATA(talkMaskMaxMouthFrame) == 0x8008D9FC);
-#endif
 
 #endif

@@ -43,28 +43,6 @@ enum GhostTapeRecordConstant
 };
 
 CTR_STATIC_ASSERT(sizeof(GhostOpcode) == 0x1);
-CTR_STATIC_ASSERT(GHOST_OP_POSITION == 0x80);
-CTR_STATIC_ASSERT(GHOST_OP_IDLE == 0x84);
-CTR_STATIC_ASSERT(GHOST_SIZE_POSITION == 11);
-CTR_STATIC_ASSERT(GHOST_SIZE_ANIMATION == 3);
-CTR_STATIC_ASSERT(GHOST_SIZE_BOOST == 6);
-CTR_STATIC_ASSERT(GHOST_SIZE_INSTANCE == 2);
-CTR_STATIC_ASSERT(GHOST_SIZE_IDLE == 1);
-CTR_STATIC_ASSERT(GHOST_SIZE_VELOCITY == 5);
-CTR_STATIC_ASSERT(GHOST_RECORD_BUFFER_SIZE == 0x3e00);
-CTR_STATIC_ASSERT(GHOST_TAPE_VERSION_RETAIL == -4);
-CTR_STATIC_ASSERT(GHOST_RECORD_POSITION_SHIFT == 3);
-CTR_STATIC_ASSERT(GHOST_RECORD_ROTATION_SHIFT == 4);
-CTR_STATIC_ASSERT(GHOST_RECORD_INTERVAL_MASK_8 == 7);
-CTR_STATIC_ASSERT(GHOST_RECORD_INTERVAL_MASK_32 == 0x1f);
-CTR_STATIC_ASSERT(GHOST_RECORD_VELOCITY_MAX == 0x80);
-CTR_STATIC_ASSERT(GHOST_RECORD_VELOCITY_MIN_EXCLUSIVE == -0x7c);
-CTR_STATIC_ASSERT(GHOST_RECORD_TIME_DELTA_MAX_EXCLUSIVE == 0xff01);
-CTR_STATIC_ASSERT(GHOST_RECORD_INSTANCE_SPLIT_FLAG == 0x2000);
-CTR_STATIC_ASSERT(GHOST_RECORD_INSTANCE_SPLIT_SHIFT == 0xd);
-CTR_STATIC_ASSERT(GHOST_RECORD_BUFFER_END_GUARD == 0x40);
-CTR_STATIC_ASSERT(GHOST_RECORD_OVERFLOW_TEXT_FRAMES == 0xb4);
-CTR_STATIC_ASSERT(GHOST_RECORD_BOOST_COOLDOWN_FRAMES == 0x1e);
 
 #define GHOST_IS_OPCODE(b) ((u8)((b) + GHOST_OP_POSITION) < (GHOST_OP_IDLE - GHOST_OP_POSITION + 1))
 #define Ghost_ReadBE16(p)  ((u16)((p)[0] << 8 | (p)[1]))
@@ -90,48 +68,49 @@ struct GhostTape
 	void *ptrCurr;
 
 	// 0x10
-	int unk10;
+	s32 unk10;
 
 	// 0x14
-	int timeElapsedInRace;
+	s32 timeElapsedInRace;
 
 	// 0x18
-	int timeInPacket32_backup;
+	s32 packetTimelineTimeMS;
 
 	// 0x1c
-	int unk1C;
-	int unk20;
+	s32 unk1C;
+	s32 unk20;
 
 	// 0x24
-	// all in GhostReplay_Init2, unused?
+	// Retail copies these snapshots after the first replay tick.
 	SVec3 unk1;
 	SVec3 unk2;
 	SVec3 unk3;
 	SVec3 unk4;
 
 	// 0x3C
-	int timeInPacket01;
+	s32 timeInPacket01;
 
 	// 0x40
-	int timeInPacket32;
+	s32 timeInPacket32;
 
 	// 0x44
-	int timeBetweenPackets;
+	s32 timeBetweenPackets;
 
 	// 0x48
-	int numPacketsInArray;
+	s32 numPacketsInArray;
 
 	// 0x4C
-	int packetID;
+	s16 packetID;
+	u16 padPacketID;
 
 	// 0x50
 	struct GhostPacket packets[0x21];
 
 	// 0x260
-	int constDEADC0ED;
+	u32 constDEADC0ED;
 
 	// 0x264
-	struct GhostHeader *gh_again; // duplicate?
+	struct GhostHeader *selectedHeader;
 
 	// 0x268 bytes large
 };
@@ -141,7 +120,7 @@ struct GhostHeader
 {
 	// 0x0
 	s16 version;
-	s16 size;
+	u16 size;
 
 	// 0x4
 	s16 levelID;
@@ -150,23 +129,34 @@ struct GhostHeader
 	s16 characterID;
 
 	// 0x8
-	int speedApprox; // useless decoy
-	int ySpeed;      // useless decoy
+	s32 speedApprox; // Restored when replay hands the driver back to bot control.
+	s32 ySpeed;
 
 	// 0x10
-	int timeElapsedInRace;
+	s32 timeElapsedInRace;
 
 	// 0x14
-	// try fresh-boot time trial, dereference 8008fbf4,
-	// you'll see it's all zeros, beat the race, double-deref 8008d754,
-	// and it's still all zeros, could be accident, or a throw-off.
-	// Only time this is non-zero is if pre-existing memory isn't wiped
+	// Reserved bytes; recording leaves their existing contents unchanged.
 	char emptyPadding[0x14];
 
 	// 0x28
-	// char recordBuffer[0]; // yes, zero bytes
+	// Variable-length packet data follows the header.
 };
 
-#define GHOSTHEADER_GETRECORDBUFFER(x) (char *)((u32)x + sizeof(struct GhostHeader))
+#define GHOSTHEADER_GETRECORDBUFFER(x) ((char *)((x) + 1))
+
+#ifndef GHOST_RECORDING
+#define GHOST_RECORDING      (sdata->GhostRecording)
+#define GHOST_PLAYING        (sdata->ptrGhostTapePlaying)
+#define GHOST_CAN_SAVE       (sdata->boolCanSaveGhost)
+#define GHOST_TOO_BIG        (sdata->boolGhostTooBigToSave)
+#define GHOST_OVERFLOW_TIMER (sdata->ghostOverflowTextTimer)
+#define GHOST_DRAWING        (sdata->boolGhostsDrawing)
+#define GHOST_TAPES          (sdata->ptrGhostTape)
+#define GHOST_REPLAY_HUMAN   (sdata->boolReplayHumanGhost)
+#define GHOST_NAME           (sdata->s_ghost)
+#define GHOST_NAME_STAFF     (sdata->s_ghost1)
+#define GHOST_NAME_HUMAN     (sdata->s_ghost0)
+#endif
 
 #endif

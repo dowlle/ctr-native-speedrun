@@ -1,18 +1,19 @@
 #include <common.h>
 
-// Returns the CseqSongHeader for the given song ID from the parsed song data buffer.
-static struct CseqSongHeader *GetCseqSongHeader(u16 songID)
+// NOTE(aalhendi): Retail reads the song offset unsigned before adding it to the data base.
+static inline struct CseqSongHeader *GetCseqSongHeader(u16 songID)
 {
-	return (struct CseqSongHeader *)&sdata->ptrCseqSongData[sdata->ptrCseqSongStartOffset[songID]];
+	return (struct CseqSongHeader *)&sdata->ptrCseqSongData[(u16)sdata->ptrCseqSongStartOffset[songID]];
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a63c-0x8002a678
 struct SongSeq *SongPool_FindFreeChannel(void)
 {
 	struct SongSeq *seq;
+	int i;
 
-	for (seq = &sdata->songSeq[0]; seq < &sdata->songSeq[NUM_SFX_CHANNELS]; seq++)
+	for (i = 0; i < NUM_SFX_CHANNELS; i++)
 	{
+		seq = &GAME_SONG_SEQUENCES[i];
 		// if seq is not playing
 		if ((seq->flags & 1) == 0)
 		{
@@ -23,17 +24,15 @@ struct SongSeq *SongPool_FindFreeChannel(void)
 	return 0;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a678-0x8002a6cc
 u32 SongPool_CalculateTempo(s16 const60, s16 tpqn, s16 bpm)
 {
 	s32 ticksPerMinute = CTR_MipsMulLo(bpm, tpqn);
-	u32 ticksPerSecond = CTR_MipsMulHiU((u32)ticksPerMinute, 0x88888889u) >> 5;
+	u32 ticksPerSecond = (u32)ticksPerMinute / 60u;
 
 	return CTR_MipsDivU((u32)CTR_MipsSll((s32)ticksPerSecond, 16), (u32)(s32)const60);
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a6cc-0x8002a730
-void SongPool_ChangeTempo(struct Song *song, s16 deltaBPM)
+void SongPool_ChangeTempo(struct Song *song, s32 deltaBPM)
 {
 	struct CseqSongHeader *csh = GetCseqSongHeader(song->id);
 
@@ -42,28 +41,35 @@ void SongPool_ChangeTempo(struct Song *song, s16 deltaBPM)
 	song->tempo = SongPool_CalculateTempo(60, song->tpqn, song->bpm);
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a730-0x8002a9d8
-void SongPool_Start(struct Song *song, u16 songID, s16 deltaBPM, b32 boolLoopAtEnd, struct SongSet *songSet, int songSetActiveBits)
+// NOTE(aalhendi): Retail passes the full tempo delta word; the song BPM store
+// performs the 16-bit truncation after the addition. The loop and song-set
+// arguments are reloaded from their incoming stack slots during sequence setup.
+void SongPool_Start(struct Song *song, u16 songID, s32 deltaBPM, b32 volatile boolLoopAtEnd, struct SongSet *volatile songSet, int songSetActiveBits)
 {
-	int i;
-	int vol;
-	u8 numSeqs;
+	s32 i;
+	s32 vol;
 	struct SongSeq *seqCurr;
 	struct CseqSongHeader *csh;
 	char *cnhFirst;
 	struct SongNoteHeader *cnhCurr;
+	u16 *seqOffsetArr;
+	s16 *songOffsets;
+	register struct SongSet *set CTR_PSX_REGISTER("$9");
+	register b32 loop CTR_PSX_REGISTER("$9");
+	u32 maxVolume;
+	u32 playingFlag;
 
 	// now playing
 	song->flags = 1;
+	// NOTE(aalhendi): Fetch the offset table before publishing the song ID.
+	songOffsets = sdata->ptrCseqSongStartOffset;
 	song->id = songID;
-
-	csh = GetCseqSongHeader(songID);
-	numSeqs = csh->numSeqs;
-
+	csh = (struct CseqSongHeader *)&sdata->ptrCseqSongData[(u16)songOffsets[songID]];
 	// advHub
-	if (songSet != 0)
+	set = songSet;
+	if (set != 0)
 	{
-		if (songSet->numSeqs != numSeqs)
+		if (set->numSeqs != csh->numSeqs)
 		{
 			return;
 		}
@@ -87,7 +93,8 @@ void SongPool_Start(struct Song *song, u16 songID, s16 deltaBPM, b32 boolLoopAtE
 
 	else
 	{
-		// partial volume
+		// NOTE(aalhendi): Keep the volume selection in this branch before the shared stores.
+		CTR_PSX_OBSERVE_MEMORY(song->vol_Curr);
 		vol = 0xbe;
 	}
 
@@ -95,7 +102,7 @@ void SongPool_Start(struct Song *song, u16 songID, s16 deltaBPM, b32 boolLoopAtE
 	song->vol_New = vol;
 
 	// Naughty Dog Box
-	if (sdata->gGT->levelID == NAUGHTY_DOG_CRATE)
+	if (GAME_TRACKER->levelID == NAUGHTY_DOG_CRATE)
 	{
 		song->vol_Curr = 0xbe;
 		song->vol_New = 0xbe;
@@ -104,34 +111,43 @@ void SongPool_Start(struct Song *song, u16 songID, s16 deltaBPM, b32 boolLoopAtE
 	song->vol_StepRate = 1;
 	song->numSequences = 0;
 
-	u16 *seqOffsetArr = (u16 *)SONGHEADER_GETSEQOFFARR(csh);
+	seqOffsetArr = (u16 *)SONGHEADER_GETSEQOFFARR(csh);
 
 	// first note header comes after end of CseqSongHeader
 	// and the full array of seqOffsets within the header
-	cnhFirst = (char *)&seqOffsetArr[numSeqs];
+	cnhFirst = (char *)&seqOffsetArr[csh->numSeqs];
 
 	// align up by 4
-	if (((uintptr_t)cnhFirst & 1) != 0)
+	if (((u32)cnhFirst & 1) != 0)
 	{
 		cnhFirst += 1;
 	}
-	if (((uintptr_t)cnhFirst & 2) != 0)
+	if (((u32)cnhFirst & 2) != 0)
 	{
 		cnhFirst += 2;
 	}
 
-	for (i = 0; i < numSeqs; i++)
+	i = 0;
+	if (csh->numSeqs == 0)
+	{
+		return;
+	}
+	// NOTE(aalhendi): Prepare the two loop constants in retail order.
+	playingFlag = 1;
+	maxVolume = 0xff;
+	CTR_PSX_KEEP_VALUE_RELAXED(maxVolume);
+	do
 	{
 		cnhCurr = (struct SongNoteHeader *)&cnhFirst[seqOffsetArr[i]];
 
 		seqCurr = SongPool_FindFreeChannel();
 		if (seqCurr == NULL)
 		{
-			continue;
+			goto nextSequence;
 		}
 
 		// now playing
-		seqCurr->flags = 1;
+		seqCurr->flags = playingFlag;
 
 		if ((cnhCurr->flags & 1) != 0)
 		{
@@ -139,7 +155,8 @@ void SongPool_Start(struct Song *song, u16 songID, s16 deltaBPM, b32 boolLoopAtE
 			seqCurr->flags = 5;
 		}
 
-		if (boolLoopAtEnd != 0)
+		loop = boolLoopAtEnd;
+		if (loop != 0)
 		{
 			seqCurr->flags |= 2;
 		}
@@ -149,23 +166,19 @@ void SongPool_Start(struct Song *song, u16 songID, s16 deltaBPM, b32 boolLoopAtE
 		seqCurr->instrumentID = 0;
 		seqCurr->reverb = 0;
 
-		// by default, have volume
-		seqCurr->vol_Curr = 0xFF;
-		seqCurr->vol_New = 0xFF;
-
-		// songSet (advHub)
-		if (songSet != 0)
+		set = songSet;
+		if (set != 0 && (set->ptrSongSetBits[i] & song->songSetActiveBits) == 0)
 		{
-			// if seq is not in current songSet
-			if ((songSet->ptrSongSetBits[i] & song->songSetActiveBits) == 0)
-			{
-				// disable the volume from the song
-				seqCurr->vol_Curr = 0;
-				seqCurr->vol_New = 0;
-			}
+			seqCurr->vol_Curr = 0;
+			seqCurr->vol_New = 0;
+		}
+		else
+		{
+			seqCurr->vol_Curr = maxVolume;
+			seqCurr->vol_New = maxVolume;
 		}
 
-		seqCurr->vol_StepRate = 1;
+		seqCurr->vol_StepRate = playingFlag;
 
 		seqCurr->distort = 0x80;
 		seqCurr->LR = 0x80;
@@ -180,11 +193,14 @@ void SongPool_Start(struct Song *song, u16 songID, s16 deltaBPM, b32 boolLoopAtE
 
 		seqCurr->currNote = howl_GetNextNote(seqCurr->firstNote, &seqCurr->NoteLength);
 
-		song->CseqSequences[song->numSequences++] = seqCurr;
-	}
+		// Publish the sequence pointer before advancing the count.
+		song->CseqSequences[song->numSequences] = seqCurr;
+		song->numSequences++;
+	nextSequence:
+		i++;
+	} while (i < csh->numSeqs);
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a9d8-0x8002a9f0
 void SongPool_Volume(struct Song *song, int newVol, int newStep, b32 boolImm)
 {
 	// if immediate change request,
@@ -198,7 +214,6 @@ void SongPool_Volume(struct Song *song, int newVol, int newStep, b32 boolImm)
 	song->vol_StepRate = newStep;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002a9f0-0x8002aa44
 void SongPool_AdvHub1(struct Song *song, int seqID, int vol, b32 boolImm)
 {
 	struct SongSeq *seq;
@@ -221,18 +236,15 @@ void SongPool_AdvHub1(struct Song *song, int seqID, int vol, b32 boolImm)
 	seq->vol_New = vol;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002aa44-0x8002ab18
 void SongPool_AdvHub2(struct Song *song, struct SongSet *songSet, int songSetActiveBits)
 {
 	int i;
-	int vol;
 	struct CseqSongHeader *csh = GetCseqSongHeader(song->id);
-	u8 numSeqs = csh->numSeqs;
 
 	// advHub
 	if (songSet != 0)
 	{
-		if (songSet->numSeqs != numSeqs)
+		if (songSet->numSeqs != csh->numSeqs)
 		{
 			return;
 		}
@@ -240,29 +252,27 @@ void SongPool_AdvHub2(struct Song *song, struct SongSet *songSet, int songSetAct
 		song->songSetActiveBits = songSetActiveBits;
 	}
 
-	for (i = 0; i < numSeqs; i++)
+	for (i = 0; i < csh->numSeqs; i++)
 	{
-		// volume on
-		vol = 0xff;
-
-		if ((songSet->ptrSongSetBits[i] & song->songSetActiveBits) == 0)
+		// NOTE(aalhendi): Keep the two volume calls distinct for retail's branch layout.
+		if ((songSet->ptrSongSetBits[i] & song->songSetActiveBits) != 0)
 		{
-			vol = 0;
+			SongPool_AdvHub1(song, i, 0xff, 0);
 		}
-
-		SongPool_AdvHub1(song, i, vol, 0);
+		else
+		{
+			SongPool_AdvHub1(song, i, 0, 0);
+		}
 	}
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002ab18-0x8002ac0c
 void SongPool_StopCseq(struct SongSeq *seq)
 {
 	struct ChannelStats *curr, *backupNext;
-	u32 *flagPtr;
 
-	for (curr = (struct ChannelStats *)sdata->channelTaken.first; curr != NULL; curr = backupNext)
+	for (curr = (struct ChannelStats *)GAME_CHANNEL_TAKEN.first; curr != NULL; curr = backupNext)
 	{
-		backupNext = curr->next;
+		backupNext = curr->link.links.next;
 
 		if (curr->type != HOWL_CHANNEL_TYPE_MUSIC)
 		{
@@ -275,22 +285,21 @@ void SongPool_StopCseq(struct SongSeq *seq)
 		}
 
 		// enable OFF flag, disable ON flag
-		flagPtr = &sdata->ChannelUpdateFlags[curr->channelID];
-		*flagPtr |= HOWL_CHANNEL_UPDATE_OFF;
-		*flagPtr &= ~HOWL_CHANNEL_UPDATE_KEY_ON;
+		GAME_CHANNEL_UPDATE_FLAGS[curr->channelID] |= HOWL_CHANNEL_UPDATE_OFF;
+		// NOTE(aalhendi): Retail rereads the flag word for the second update.
+		*(volatile u32 *)&GAME_CHANNEL_UPDATE_FLAGS[curr->channelID] &= ~HOWL_CHANNEL_UPDATE_KEY_ON;
 
 		curr->flags &= (u8)~1;
 
 		// recycle: remove from taken, put on free
-		LIST_RemoveMember(&sdata->channelTaken, (struct Item *)curr);
-		LIST_AddBack(&sdata->channelFree, (struct Item *)curr);
+		LIST_RemoveMember(&GAME_CHANNEL_TAKEN, (struct Item *)curr);
+		LIST_AddBack(&GAME_CHANNEL_FREE, (struct Item *)curr);
 	}
 
 	// not playing
 	seq->flags &= ~(1);
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002ac0c-0x8002ac94
 void SongPool_StopAllCseq(struct Song *song)
 {
 	int i;

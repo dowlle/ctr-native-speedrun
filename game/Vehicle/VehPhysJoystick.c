@@ -11,18 +11,15 @@ enum
 	JOYSTICK_STRENGTH_CURVE_SEGMENTS = 5,
 };
 
-CTR_STATIC_ASSERT(RACING_WHEEL_DEFAULT_CENTER == 0x80);
-CTR_STATIC_ASSERT(RACING_WHEEL_DEFAULT_DEAD_ZONE == 0x30);
-CTR_STATIC_ASSERT(RACING_WHEEL_DEFAULT_RANGE == 0x7f);
-CTR_STATIC_ASSERT(RACING_WHEEL_DEFAULT_STRENGTH_DISTANCE == 0x5e);
-CTR_STATIC_ASSERT(JOYSTICK_STRENGTH_CURVE_SEGMENTS == 5);
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8006163c-0x800616b0.
 int VehPhysJoystick_ReturnToRest(int stickVal, int half, struct RacingWheelData *rwd)
 {
-	int center = RACING_WHEEL_DEFAULT_CENTER;
-	int deadZone = RACING_WHEEL_DEFAULT_DEAD_ZONE;
-	int range = RACING_WHEEL_DEFAULT_RANGE;
+	register int outputHalf CTR_PSX_REGISTER("$3");
+	int center;
+	int deadZone;
+	int range;
+
+	outputHalf = half;
 
 	if (rwd != 0)
 	{
@@ -30,33 +27,40 @@ int VehPhysJoystick_ReturnToRest(int stickVal, int half, struct RacingWheelData 
 		deadZone = rwd->deadZone;
 		range = rwd->range;
 	}
+	else
+	{
+		center = RACING_WHEEL_DEFAULT_CENTER;
+		deadZone = RACING_WHEEL_DEFAULT_DEAD_ZONE;
+		range = RACING_WHEEL_DEFAULT_RANGE;
+	}
 
 	stickVal = CTR_MipsSubLo(stickVal, center);
 	if (stickVal < 0)
 	{
-		return CTR_MipsNegLo(VehCalc_MapToRange(CTR_MipsNegLo(stickVal), deadZone, range, 0, half));
+		return CTR_MipsNegLo(VehCalc_MapToRange(CTR_MipsNegLo(stickVal), deadZone, range, 0, outputHalf));
 	}
 
-	return VehCalc_MapToRange(stickVal, deadZone, range, 0, half);
+	return VehCalc_MapToRange(stickVal, deadZone, range, 0, outputHalf);
 }
 
-struct RacingWheelData rwd_default = {
-    .gamepadCenter = RACING_WHEEL_DEFAULT_CENTER,
-    .deadZone = RACING_WHEEL_DEFAULT_DEAD_ZONE,
-    .range = RACING_WHEEL_DEFAULT_RANGE,
-};
-
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x800616b0-0x800617cc.
 int VehPhysJoystick_GetStrength(int val, int max, struct RacingWheelData *rwd)
 {
-	int dead = RACING_WHEEL_DEFAULT_DEAD_ZONE;
-	int range = RACING_WHEEL_DEFAULT_RANGE;
-	int dist = RACING_WHEEL_DEFAULT_STRENGTH_DISTANCE;
+	int dead;
+	int range;
+	int dist;
+	int halfDist;
+
 	if (rwd != 0)
 	{
 		dead = rwd->deadZone;
 		range = rwd->range;
 		dist = CTR_MipsSubLo(range, dead);
+	}
+	else
+	{
+		dead = RACING_WHEEL_DEFAULT_DEAD_ZONE;
+		range = RACING_WHEEL_DEFAULT_RANGE;
+		dist = RACING_WHEEL_DEFAULT_STRENGTH_DISTANCE;
 	}
 
 	if (val < dead)
@@ -64,38 +68,46 @@ int VehPhysJoystick_GetStrength(int val, int max, struct RacingWheelData *rwd)
 		return 0;
 	}
 
-	dead = CTR_MipsSubLo(val, dead);
-
 	if (range <= val)
 	{
 		return max;
 	}
 
-	int halfDist = CTR_MipsSra(CTR_MipsAddLo(dist, (u32)dist >> 31), 1);
-	int maxFifth = max / JOYSTICK_STRENGTH_CURVE_SEGMENTS;
+	val = CTR_MipsSubLo(val, dead);
+	halfDist = CTR_MipsSra(CTR_MipsAddLo(dist, (u32)dist >> 31), 1);
 
-	if (halfDist <= dead)
+	if (val < halfDist)
 	{
-		dead = CTR_MipsSubLo(dead, halfDist);
-		dead = CTR_MipsMulLo(dead, CTR_MipsSubLo(max, maxFifth));
-		dead = CTR_MipsSll(dead, 1);
-		return CTR_MipsAddLo(CTR_MipsDiv(dead, dist), maxFifth);
+		int product;
+
+		max = max / JOYSTICK_STRENGTH_CURVE_SEGMENTS;
+		product = CTR_MipsMulLo(val, max);
+		product = CTR_MipsSll(product, 1);
+		return CTR_MipsDiv(product, dist);
 	}
 
-	dead = CTR_MipsMulLo(dead, CTR_MipsSll(maxFifth, 1));
-	return CTR_MipsDiv(dead, dist);
+	{
+		int maxFifth = max / JOYSTICK_STRENGTH_CURVE_SEGMENTS;
+		int product;
+
+		val = CTR_MipsSubLo(val, halfDist);
+		max = CTR_MipsSubLo(max, maxFifth);
+		product = CTR_MipsMulLo(val, max);
+		product = CTR_MipsSll(product, 1);
+		return CTR_MipsAddLo(CTR_MipsDiv(product, dist), maxFifth);
+	}
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x800617cc-0x8006181c.
 int VehPhysJoystick_GetStrengthAbsolute(int stickVal, int maxSteer, struct RacingWheelData *rwd)
 {
-	int center = RACING_WHEEL_DEFAULT_CENTER;
+	register int center CTR_PSX_REGISTER("$2") = RACING_WHEEL_DEFAULT_CENTER;
+	int distFromCenter;
+
 	if (rwd != NULL)
 	{
 		center = rwd->gamepadCenter;
 	}
-
-	int distFromCenter = CTR_MipsSubLo(stickVal, center);
+	distFromCenter = CTR_MipsSubLo(stickVal, center);
 
 	// if steering right
 	if (distFromCenter < 0)

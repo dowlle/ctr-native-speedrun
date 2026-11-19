@@ -1,29 +1,35 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80022234-0x800222e0.
+// NOTE(aalhendi): Keep the byte in a word-sized local for retail's OR operand
+// order, but narrow each source read so native char signedness cannot change it.
 void CTR_ScrambleGhostString(char *dst, const char *src)
 {
-	u8 inputByte = *src;
+	u32 inputByte = (u8)*src;
+	u32 key;
+	u16 *entry;
+	u16 entryKey;
+	u16 encoded;
 
 	while (inputByte != '\0')
 	{
-		u32 key = 0;
+		key = 0;
 
 		if (inputByte < 4)
 		{
-			inputByte = *src++;
+			inputByte = (u8)*src++;
 			key = (u32)inputByte << 8;
 		}
 
-		inputByte = *src++;
-		key |= inputByte;
+		inputByte = (u8)*src++;
 
-		u16 *entry = &data.ghostScrambleData[0];
-		while (entry[1] != 0xffff)
+		entry = &data.ghostScrambleData[0];
+		entryKey = entry[1];
+		key |= inputByte;
+		while (entryKey != 0xffff)
 		{
-			if (entry[1] == (key & 0xffff))
+			if (entryKey == (key & 0xffff))
 			{
-				u16 encoded = entry[0];
+				encoded = entry[0];
 				if ((encoded & 0xff00) != 0)
 				{
 					*dst++ = encoded >> 8;
@@ -33,9 +39,10 @@ void CTR_ScrambleGhostString(char *dst, const char *src)
 			}
 
 			entry += 2;
+			entryKey = entry[1];
 		}
 
-		inputByte = *src;
+		inputByte = (u8)*src;
 	}
 
 	*dst = '\0';

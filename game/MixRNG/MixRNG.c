@@ -1,24 +1,24 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003ea28-0x8003ea6c
-int MixRNG_Scramble()
+s32 MixRNG_Scramble(void)
 {
-	// random algorithm for seemingly-random numbers
-	sdata->randomNumber = (sdata->randomNumber * 0x6255 + 0x3619) & 0xffff;
+	// Advance the 16-bit linear congruential generator.
+	sdata->randomNumber = ((u32)sdata->randomNumber * 0x6255 + 0x3619) & 0xffff;
+	// NOTE(aalhendi): Keep the state store before the return, not in its delay slot.
+	CTR_PSX_OBSERVE_MEMORY(sdata->randomNumber);
 	return sdata->randomNumber;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003ea6c-0x8003eaac
-int MixRNG_Particles(int param_1)
+s32 MixRNG_Particles(s32 range)
 {
-	u32 uVar1;
+	u32 random;
 
-	uVar1 = RngDeadCoed(&sdata->gGT->deadcoed_struct);
-	return (int)((uVar1 & 0xffff) * param_1) >> 0x10;
+	random = RngDeadCoed(&GAME_TRACKER->deadcoed_struct);
+	// Preserve the signed high half of the wrapping 32-bit product.
+	return (s32)((random & 0xffff) * range) >> 16;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003eaac-0x8003eae0
-u32 MixRNG_GetValue(int param_1)
+u32 MixRNG_GetValue(s32 seed)
 {
-	return (param_1 * 0x6255 + 0x3619U) & 0xffff;
+	return ((u32)seed * 0x6255 + 0x3619) & 0xffff;
 }

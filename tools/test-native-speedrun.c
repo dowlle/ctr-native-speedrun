@@ -3,6 +3,7 @@
 
 #include <platform/native_speedrun.h>
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 

@@ -15,7 +15,14 @@
 #define CTR_NATIVE_BUILD_ID "unknown"
 #endif
 
-__attribute__((section(".ctrbid"), used)) global_variable struct NativeBuildId g_ctr_build_id = {
+#if defined(_MSC_VER)
+#pragma section(".ctrbid", read, write)
+#pragma comment(linker, "/include:_g_ctr_build_id")
+__declspec(allocate(".ctrbid"))
+#else
+__attribute__((section(".ctrbid"), used))
+#endif
+struct NativeBuildId g_ctr_build_id = {
     .magic = NATIVE_BUILDID_MAGIC,
     .abiVersion = NATIVE_BUILDID_ABI_VERSION,
     .version = CTR_NATIVE_VERSION,

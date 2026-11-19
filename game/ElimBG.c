@@ -44,16 +44,12 @@ enum ElimBGConstants
 	ELIM_BG_VRAM_U_WRAP = 0x80,
 };
 
-CTR_STATIC_ASSERT(ELIM_BG_PRIMMEM_PAUSE_BYTES == 0xc800);
-CTR_STATIC_ASSERT(ELIM_BG_RAW_STRIP_OFFSET == 0x800);
-CTR_STATIC_ASSERT(ELIM_BG_TEXTURE_BACKUP_OFFSET == 0x4800);
-CTR_STATIC_ASSERT(ELIM_BG_CHUNK_SOURCE_PIXELS == 0x1000);
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80024524-0x8002459c.
 void ElimBG_SaveScreenshot_Chunk(u16 *packedStrip, u16 *rawStrip, int rawPixelCount)
 {
 	u16 packedPixel;
-	u16 *rawGroupLast;
+	register u16 *rawCursor CTR_PSX_REGISTER("$7") = rawStrip;
+	register u16 *rawGroupLast CTR_PSX_REGISTER("$5");
 
 	if (rawPixelCount == 0)
 	{
@@ -62,18 +58,25 @@ void ElimBG_SaveScreenshot_Chunk(u16 *packedStrip, u16 *rawStrip, int rawPixelCo
 
 	rawGroupLast = rawStrip + 3;
 
-	for (; rawPixelCount > 0; rawPixelCount -= 4, rawStrip += 4, rawGroupLast += 4, packedStrip++)
+	// NOTE(aalhendi): Retail stores each partial packed word; both callers pass a multiple of four pixels.
+	do
 	{
-		packedPixel = (u16)((rawStrip[0] & 0x3e0) >> 6);
+		packedPixel = (u16)((rawCursor[0] & 0x3e0) >> 6);
+		*(volatile u16 *)packedStrip = packedPixel;
 		packedPixel |= rawGroupLast[-2] >> 2 & 0xf0;
-		packedPixel |= (u16)((rawGroupLast[-1] & 0x3c0) << 2);
-		packedPixel |= (u16)((*rawGroupLast & 0x3c0) << 6);
-		*packedStrip = packedPixel;
-	};
+		*(volatile u16 *)packedStrip = packedPixel;
+		packedPixel |= (u16)(((u32)rawGroupLast[-1] << 2) & 0xf00);
+		*(volatile u16 *)packedStrip = packedPixel;
+		packedPixel |= (u16)(((u32)*rawGroupLast << 6) & 0xf000);
+		*(volatile u16 *)packedStrip = packedPixel;
+		rawCursor += 4;
+		rawPixelCount -= 4;
+		rawGroupLast += 4;
+		packedStrip++;
+	} while (rawPixelCount != 0);
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002459c-0x8002481c.
 void ElimBG_SaveScreenshot_Full(struct GameTracker *gGT)
 {
 	int bufferIndex;
@@ -81,6 +84,8 @@ void ElimBG_SaveScreenshot_Full(struct GameTracker *gGT)
 	RECT rect2;
 	RECT rSrc;
 	RECT rDst;
+	u32 start1;
+	u32 start2;
 
 	bufferIndex = 0;
 
@@ -95,8 +100,8 @@ void ElimBG_SaveScreenshot_Full(struct GameTracker *gGT)
 
 	// vram copy, then overwrite vram with pause image
 
-	u32 start1 = (u32)gGT->db[0].primMem.end;
-	u32 start2 = (u32)gGT->db[1].primMem.end;
+	start1 = (u32)gGT->db[0].primMem.end;
+	start2 = (u32)gGT->db[1].primMem.end;
 	start1 -= ELIM_BG_PRIMMEM_PAUSE_BYTES;
 	start2 -= ELIM_BG_PRIMMEM_PAUSE_BYTES;
 	gGT->db[0].primMem.end = (void *)start1;
@@ -164,35 +169,42 @@ void ElimBG_SaveScreenshot_Full(struct GameTracker *gGT)
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002481c-0x80024840.
 void ElimBG_Activate(struct GameTracker *gGT)
 {
-	sdata->pause_backup_renderFlags = gGT->renderFlags;
-	sdata->pause_backup_hudFlags = gGT->hudFlags;
+	u32 renderFlags = gGT->renderFlags;
+
 	sdata->pause_state = ELIM_BG_PAUSE_STATE_CAPTURE;
+	sdata->pause_backup_renderFlags = renderFlags;
+	sdata->pause_backup_hudFlags = gGT->hudFlags;
+	// NOTE(aalhendi): Retail completes the HUD backup store before returning.
+	CTR_PSX_MEMORY_BARRIER();
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80024840-0x800248bc.
 void ElimBG_ToggleInstance(struct Instance *inst, b32 boolGameIsPaused)
 {
 	u32 flags;
+	u32 updatedFlags;
+	register u32 pauseMask CTR_PSX_REGISTER("$3");
+	register u32 clearedFlags CTR_PSX_REGISTER("$2");
 
 	// if game is being paused
 	if (boolGameIsPaused)
 	{
 		flags = inst->flags;
 
-		if (!(flags & HIDE_MODEL))
+		if (flags & HIDE_MODEL)
 		{
-			flags &= ~INVISIBLE_BEFORE_PAUSE;
+			updatedFlags = flags | INVISIBLE_BEFORE_PAUSE;
 		}
 		else
 		{
-			flags |= INVISIBLE_BEFORE_PAUSE;
+			updatedFlags = flags & ~INVISIBLE_BEFORE_PAUSE;
 		}
 
-		inst->flags = flags;
+		inst->flags = updatedFlags;
+		// NOTE(aalhendi): Retail stores and reloads flags between the two pause stages.
+		CTR_PSX_MEMORY_BARRIER();
 		inst->flags |= (INVISIBLE_DURING_PAUSE | HIDE_MODEL);
 
 		return;
@@ -200,40 +212,48 @@ void ElimBG_ToggleInstance(struct Instance *inst, b32 boolGameIsPaused)
 
 	if ((inst->flags & (INVISIBLE_BEFORE_PAUSE | INVISIBLE_DURING_PAUSE)) == INVISIBLE_DURING_PAUSE)
 	{
-		inst->flags &= ~(INVISIBLE_DURING_PAUSE | HIDE_MODEL);
+		// NOTE(aalhendi): Keep the two clears distinct and in retail's v1/v0 mask order.
+		pauseMask = ~INVISIBLE_DURING_PAUSE;
+		CTR_PSX_KEEP_VALUE(pauseMask);
+		clearedFlags = inst->flags & ~HIDE_MODEL;
+		CTR_PSX_KEEP_VALUE(clearedFlags);
+		inst->flags = clearedFlags & pauseMask;
 	}
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x800248bc-0x80024974.
 void ElimBG_ToggleAllInstances(struct GameTracker *gGT, b32 boolGameIsPaused)
 {
 	struct Level *lev;
 	struct Instance *inst;
 	struct InstDef *ptrInstDefs;
+	struct InstDef *endInstDef;
+	int numInstances;
 
 	lev = gGT->level1;
+	numInstances = lev->numInstances;
+	ptrInstDefs = lev->ptrInstDefs;
+	endInstDef = ptrInstDefs + numInstances;
 
 	// Loop through all instances in level
-	for (ptrInstDefs = &lev->ptrInstDefs[0]; ptrInstDefs < &lev->ptrInstDefs[lev->numInstances]; ptrInstDefs++)
+	for (; ptrInstDefs < endInstDef; ptrInstDefs++)
 	{
-		inst = ptrInstDefs->ptrInstance;
+		struct Instance *levelInst = ptrInstDefs->ptrInstance;
 
-		if (inst != 0)
+		if (levelInst != 0)
 		{
-			ElimBG_ToggleInstance(inst, boolGameIsPaused);
+			ElimBG_ToggleInstance(levelInst, boolGameIsPaused);
 		}
 	}
 
 	// Loop through all instances in Instance Pool
-	for (inst = (struct Instance *)gGT->JitPools.instance.taken.first; inst != 0; inst = inst->next)
+	for (inst = (struct Instance *)LIST_GetFirstItem(&gGT->JitPools.instance.taken); inst != 0; inst = (struct Instance *)LIST_GetNextItem((struct Item *)inst))
 	{
 		ElimBG_ToggleInstance(inst, boolGameIsPaused);
 	}
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80024974-0x80024c08.
 void ElimBG_HandleState(struct GameTracker *gGT)
 {
 	s16 screenX;
@@ -393,20 +413,24 @@ void ElimBG_HandleState(struct GameTracker *gGT)
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80024c08-0x80024c4c.
 void ElimBG_Deactivate(struct GameTracker *gGT)
 {
-	// it's written this way for bytebudget reasons.
-	u8 backup = (u8)sdata->pause_backup_hudFlags;
+	u32 renderFlags;
+	u32 backupRenderFlags;
+	u8 backupHudFlags;
 
 	// if game is paused
 	if (sdata->pause_state != ELIM_BG_PAUSE_STATE_NONE)
 	{
+		renderFlags = gGT->renderFlags & RENDER_FLAG_CHECKERED_FLAG;
+
 		// request the one-frame VRAM restore path
 		sdata->pause_state = ELIM_BG_PAUSE_STATE_RESTORE;
+		backupRenderFlags = sdata->pause_backup_renderFlags & RENDER_FLAG_ALL_EXCEPT_CHECKERED_FLAG_MASK;
+		backupHudFlags = (u8)sdata->pause_backup_hudFlags;
 
-		gGT->renderFlags = (gGT->renderFlags & RENDER_FLAG_CHECKERED_FLAG) | (sdata->pause_backup_renderFlags & RENDER_FLAG_ALL_EXCEPT_CHECKERED_FLAG_MASK);
+		gGT->renderFlags = renderFlags | backupRenderFlags;
 
-		gGT->hudFlags = backup;
+		gGT->hudFlags = backupHudFlags;
 	}
 }

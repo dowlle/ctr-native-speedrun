@@ -1,27 +1,37 @@
 #include <common.h>
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003d6e8-0x8003d730.
 char *MEMCARD_StringInit(int slotIndex, char *dstString)
 {
+	u32 firstDigit;
+	u32 secondDigit;
+	// NOTE(aalhendi): Keep both halves of the retail fallback address in a1.
+	register char *defaultString CTR_PSX_REGISTER("$5");
+
 	if (!dstString)
 	{
-		dstString = &sdata->s_memcardDirHeader[0];
+		defaultString = GAME_MEMCARD_DIR_HEADER;
+		CTR_PSX_KEEP_VALUE_RELAXED(defaultString);
+		dstString = defaultString;
 	}
+	// NOTE(aalhendi): Keep digit formation after the fallback branch as in retail.
+	CTR_PSX_MEMORY_BARRIER();
 
-	dstString[0] = 'b';
-	dstString[1] = 'u';
-	dstString[2] = '0' + ((slotIndex >> 4) & 1);
-	dstString[3] = '0' + (slotIndex & 3);
-	dstString[4] = ':';
-	dstString[5] = '\0';
+	firstDigit = ('0' + ((slotIndex >> 4) & 1)) << 16;
+	secondDigit = (('0' + (slotIndex & 3)) << 24) | 0x7562;
+	CTR_WriteU32AlignedLE(dstString, firstDigit | secondDigit);
+	// NOTE(aalhendi): Native char buffers need byte writes; retail uses one halfword store.
+#ifdef CTR_NATIVE
+	CTR_WriteU16LE(dstString + 4, 0x3a);
+#else
+	*(u16 *)(dstString + 4) = 0x3a;
+#endif
 	return dstString;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8003d730-0x8003d7d8.
 void MEMCARD_StringSet(char *dstString, int slotIdx, char *srcString)
-
 {
 	int i;
+	int j;
 	MEMCARD_StringInit(slotIdx, dstString);
 
 	// fast strlen
@@ -30,7 +40,7 @@ void MEMCARD_StringSet(char *dstString, int slotIdx, char *srcString)
 	}
 
 	// copy string from src to dst
-	for (int j = 0; (srcString[j] != '\0' && i < 63); j++)
+	for (j = 0; (srcString[j] != '\0' && i < 63); j++)
 	{
 		dstString[i] = srcString[j];
 		i++;

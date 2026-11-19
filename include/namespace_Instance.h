@@ -1,6 +1,18 @@
 #ifndef CTR_NATIVE_NAMESPACE_INSTANCE_H
 #define CTR_NATIVE_NAMESPACE_INSTANCE_H
 
+// Stack request consumed by INSTANCE_BirthWithThread_Stack.
+struct InstanceBirthParams
+{
+	s32 modelID;
+	const char *name;
+	s32 poolType;
+	s32 bucket;
+	void *funcThTick;
+	s32 objSize;
+	struct Thread *parent;
+};
+
 // & 0x1 = draw instance
 // & 0x2, 0x4, 0x8 -- FUN_80030ad4 -- collision?
 // & 0x10 = animation: loop
@@ -63,7 +75,7 @@ enum InstanceColorRGBA
 	INST_COLOR_KEY = 0xdca6000,
 };
 
-force_inline u32 INST_PackColorRGB(s32 r, s32 g, s32 b)
+static inline u32 INST_PackColorRGB(s32 r, s32 g, s32 b)
 {
 	return ((u32)r << 0x14) | ((u32)g << 0xc) | ((u32)b << 0x4);
 }
@@ -390,7 +402,7 @@ enum
 	MODEL_NAME_WORD_COUNT = MODEL_NAME_BYTE_COUNT / (s32)sizeof(u32),
 };
 
-force_inline u32 ModelName_ReadWord(const char *name, s32 wordIndex)
+static inline u32 ModelName_ReadWord(const char *name, s32 wordIndex)
 {
 	u32 word;
 	memcpy(&word, &name[wordIndex * (s32)sizeof(word)], sizeof(word));
@@ -524,9 +536,9 @@ struct InstDrawPerPlayer
 
 CTR_STATIC_ASSERT(offsetof(struct InstDrawPerPlayer, pushBuffer) == 0x0);
 CTR_STATIC_ASSERT(offsetof(struct InstDrawPerPlayer, mvp) == 0x4);
-CTR_STATIC_ASSERT(offsetof(struct InstDrawPerPlayer, mvp.t[0]) == 0x18);
-CTR_STATIC_ASSERT(offsetof(struct InstDrawPerPlayer, mvp.t[1]) == 0x1c);
-CTR_STATIC_ASSERT(offsetof(struct InstDrawPerPlayer, mvp.t[2]) == 0x20);
+CTR_STATIC_ASSERT(offsetof(struct InstDrawPerPlayer, mvp) + CTR_OFFSET_OF_ARRAY(MATRIX, t, 0) == 0x18);
+CTR_STATIC_ASSERT(offsetof(struct InstDrawPerPlayer, mvp) + CTR_OFFSET_OF_ARRAY(MATRIX, t, 1) == 0x1c);
+CTR_STATIC_ASSERT(offsetof(struct InstDrawPerPlayer, mvp) + CTR_OFFSET_OF_ARRAY(MATRIX, t, 2) == 0x20);
 CTR_STATIC_ASSERT(offsetof(struct InstDrawPerPlayer, m3x3) == 0x24);
 CTR_STATIC_ASSERT(offsetof(struct InstDrawPerPlayer, instFlags) == 0x44);
 CTR_STATIC_ASSERT(offsetof(struct InstDrawPerPlayer, alphaScale) == 0x48);
@@ -634,7 +646,8 @@ struct Instance
 	u32 compressedNormalAndDriverIndex;
 
 	// 0x74
-	// struct InstDrawPerPlayer idpp[0];
+	// NOTE(aalhendi): The instance pool reserves one trailing record per viewport.
+	struct InstDrawPerPlayer idpp[0];
 };
 
 CTR_STATIC_ASSERT(offsetof(struct Instance, next) == 0x0);
@@ -646,9 +659,9 @@ CTR_STATIC_ASSERT(offsetof(struct Instance, scale.z) == 0x20);
 CTR_STATIC_ASSERT(offsetof(struct Instance, alphaScale) == 0x22);
 CTR_STATIC_ASSERT(offsetof(struct Instance, flags) == 0x28);
 CTR_STATIC_ASSERT(offsetof(struct Instance, matrix) == 0x30);
-CTR_STATIC_ASSERT(offsetof(struct Instance, matrix.t[0]) == 0x44);
-CTR_STATIC_ASSERT(offsetof(struct Instance, matrix.t[1]) == 0x48);
-CTR_STATIC_ASSERT(offsetof(struct Instance, matrix.t[2]) == 0x4c);
+CTR_STATIC_ASSERT(offsetof(struct Instance, matrix) + CTR_OFFSET_OF_ARRAY(MATRIX, t, 0) == 0x44);
+CTR_STATIC_ASSERT(offsetof(struct Instance, matrix) + CTR_OFFSET_OF_ARRAY(MATRIX, t, 1) == 0x48);
+CTR_STATIC_ASSERT(offsetof(struct Instance, matrix) + CTR_OFFSET_OF_ARRAY(MATRIX, t, 2) == 0x4c);
 CTR_STATIC_ASSERT(offsetof(struct Instance, depthBiasNormal) == 0x50);
 CTR_STATIC_ASSERT(offsetof(struct Instance, depthBiasSecondary) == 0x51);
 CTR_STATIC_ASSERT(offsetof(struct Instance, animIndex) == 0x52);
@@ -656,10 +669,10 @@ CTR_STATIC_ASSERT(offsetof(struct Instance, specLightX) == 0x53);
 CTR_STATIC_ASSERT(offsetof(struct Instance, animFrame) == 0x54);
 CTR_STATIC_ASSERT(offsetof(struct Instance, vertSplit) == 0x56);
 CTR_STATIC_ASSERT(offsetof(struct Instance, funcPtr) == 0x5c);
-CTR_STATIC_ASSERT(offsetof(struct Instance, funcPtr[0]) == 0x5c);
-CTR_STATIC_ASSERT(offsetof(struct Instance, funcPtr[1]) == 0x60);
-CTR_STATIC_ASSERT(offsetof(struct Instance, funcPtr[2]) == 0x64);
-CTR_STATIC_ASSERT(offsetof(struct Instance, funcPtr[3]) == 0x68);
+CTR_STATIC_ASSERT(CTR_OFFSET_OF_ARRAY(struct Instance, funcPtr, 0) == 0x5c);
+CTR_STATIC_ASSERT(CTR_OFFSET_OF_ARRAY(struct Instance, funcPtr, 1) == 0x60);
+CTR_STATIC_ASSERT(CTR_OFFSET_OF_ARRAY(struct Instance, funcPtr, 2) == 0x64);
+CTR_STATIC_ASSERT(CTR_OFFSET_OF_ARRAY(struct Instance, funcPtr, 3) == 0x68);
 CTR_STATIC_ASSERT(offsetof(struct Instance, thread) == 0x6c);
 CTR_STATIC_ASSERT(offsetof(struct Instance, compressedNormalAndDriverIndex) == 0x70);
 CTR_STATIC_ASSERT(sizeof(struct Instance) == 0x74);
@@ -691,6 +704,6 @@ static inline u32 INST_CompressNormalVectorAndDriverIndex(s32 normalX, s32 norma
 	return INST_CompressNormalVector(normalX, normalY, normalZ) | (((u32)driverID + INST_COMPRESSED_DRIVER_INDEX_OFFSET) << INST_COMPRESSED_DRIVER_INDEX_SHIFT);
 }
 
-#define INST_GETIDPP(x) (struct InstDrawPerPlayer *)((u32)x + sizeof(struct Instance))
+#define INST_GETIDPP(x) ((struct InstDrawPerPlayer *)((u32)x + sizeof(struct Instance)))
 
 #endif

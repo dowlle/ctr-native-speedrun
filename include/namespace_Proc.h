@@ -10,6 +10,14 @@ enum STACK_POOL
 	SMALL = 0x300
 };
 
+// Pool record capacities, including the intrusive list header.
+enum ThreadStackSize
+{
+	THREAD_SMALL_STACK_SIZE = 0x48,
+	THREAD_MEDIUM_STACK_SIZE = 0x88,
+	THREAD_LARGE_STACK_SIZE = 0x670,
+};
+
 enum THREAD_RELATIVE
 {
 	// yes, both are zero
@@ -56,9 +64,15 @@ typedef u32 ThreadFlags;
 CTR_STATIC_ASSERT(sizeof(ThreadFlags) == 0x4);
 
 typedef void (*ThreadFunc)(struct Thread *self);
-typedef void (*ThreadSimpleCollideFunc)(struct Thread *self);
 typedef int (*ThreadScratchCollideFunc)(struct Thread *self, struct Thread *other, void *funcThCollide, struct ScratchpadStruct *sps);
-typedef int (*ThreadBurstCollideFunc)(struct Thread *self, struct Thread *other, void *funcThCollide, int modelID);
+
+struct ThreadCollisionArgs
+{
+	struct Thread *self;
+	struct Thread *other;
+	void *funcThCollide;
+	struct ScratchpadStruct *sps;
+};
 
 enum
 {
@@ -197,8 +211,6 @@ CTR_STATIC_ASSERT(offsetof(struct BucketSearchParams, bestDistSq) == 0xc);
 CTR_STATIC_ASSERT(offsetof(struct BucketSearchParams, dist) == 0x10);
 CTR_STATIC_ASSERT(sizeof(struct BucketSearchParams) == 0x18);
 CTR_STATIC_ASSERT(sizeof(struct DriverCollisionSearch) == 0x20);
-CTR_STATIC_ASSERT(THREAD_FLAG_DEAD == 0x0800);
-CTR_STATIC_ASSERT(THREAD_FLAG_DISABLE_COLLISION == 0x1000);
 
 // These are used to recursively
 // search threads with unidirectional

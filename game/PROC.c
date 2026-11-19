@@ -14,10 +14,9 @@ static struct ThTickNativeContext *s_thTickContext;
 #endif
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80041dc0-0x80041dfc.
 void PROC_DestroyTracker(struct Thread *t)
 {
-	struct GameTracker *gGT = sdata->gGT;
+	struct GameTracker *gGT = GAME_TRACKER;
 
 	if (gGT->numMissiles > 0)
 	{
@@ -28,47 +27,38 @@ void PROC_DestroyTracker(struct Thread *t)
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80041dfc-0x80041e20.
 void PROC_DestroyInstance(struct Thread *t)
 {
 	INSTANCE_Death(t->inst);
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80041e20-0x80041e9c.
-void PROC_DestroyObject(void *object, int threadFlags)
+void PROC_DestroyObject(void *object, ThreadFlags threadFlags)
 {
-	struct JitPool *myPool;
+	struct Item *item;
 
 	if (object == NULL)
 	{
 		return;
 	}
 
-	if ((threadFlags & 0x300) == 0x100)
+	// The payload follows the pool's intrusive list header.
+	item = (struct Item *)((u8 *)object - sizeof(struct Item));
+	switch (threadFlags & 0x300)
 	{
-		myPool = &sdata->gGT->JitPools.largeStack;
+	case LARGE:
+		LIST_AddFront(&GAME_TRACKER->JitPools.largeStack.free, item);
+		break;
+	case MEDIUM:
+		LIST_AddFront(&GAME_TRACKER->JitPools.mediumStack.free, item);
+		break;
+	default:
+		LIST_AddFront(&GAME_TRACKER->JitPools.smallStack.free, item);
+		break;
 	}
-	else if ((threadFlags & 0x300) == 0x200)
-	{
-		myPool = &sdata->gGT->JitPools.mediumStack;
-	}
-	else
-	{
-		myPool = &sdata->gGT->JitPools.smallStack;
-	}
-
-	// in allocation, "next" and "prev" are abstracted
-	// with obj+=8, so not all structs need "next" and "prev",
-	// now subtract 8 bytes to access those two pointers
-	object = (void *)((u8 *)object - 8);
-
-	// add object back to free list
-	LIST_AddFront(&myPool->free, (struct Item *)object);
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80041e9c-0x80041f04.
 void PROC_DestroySelf(struct Thread *t)
 {
 	// thread must exist
@@ -77,7 +67,7 @@ void PROC_DestroySelf(struct Thread *t)
 		return;
 	}
 
-	// this is usuallly PROC_DestroyInstance
+	// This is usually PROC_DestroyInstance; run it before recycling either allocation.
 	if (t->funcThDestroy != 0)
 	{
 		t->funcThDestroy(t);
@@ -91,11 +81,10 @@ void PROC_DestroySelf(struct Thread *t)
 	PROC_DestroyObject(t->object, t->flags);
 
 	// recycle thread
-	LIST_AddFront(&sdata->gGT->JitPools.thread.free, (struct Item *)t);
+	LIST_AddFront(&GAME_TRACKER->JitPools.thread.free, (struct Item *)t);
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80041f04-0x80041f58.
 void PROC_DestroyBloodline(struct Thread *t)
 {
 	while (t != 0)
@@ -115,49 +104,32 @@ void PROC_DestroyBloodline(struct Thread *t)
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80041f58-0x80041ff4.
 void PROC_CheckBloodlineForDead(struct Thread **replaceSelf, struct Thread *th)
 {
 	while (th != 0)
 	{
 		struct Thread *siblingThread = th->siblingThread;
 
-		if ((th->flags & THREAD_FLAG_DEAD) == 0)
+		if ((th->flags & THREAD_FLAG_DEAD) != 0)
 		{
-			// [wow this sounds dark]
-			// check child's bloodline, and if child is dead, then
-			// "childThread" inside "th" will be replaced with the
-			// child's sibling, or nullptr if all children are dead
-
-			// recursively find all children
-			if (th->childThread != 0)
-			{
-				PROC_CheckBloodlineForDead(&th->childThread, th->childThread);
-			}
-
-			// current thread is alive, doesn't need to be overwritten,
-			// next check sibling, so sibling will be replaced by the
-			// sibling's sibling, if the sibling's sibling is dead
-			replaceSelf = &th->siblingThread;
-		}
-
-		// if this thread needs to die
-		else
-		{
-			// recursively find all children
 			if (th->childThread != 0)
 			{
 				PROC_DestroyBloodline(th->childThread);
 			}
 
 			PROC_DestroySelf(th);
-
-			// replace thread with pointer to it's own sibling
+			// Keep the incoming link: the next sibling may also need removal.
 			*replaceSelf = siblingThread;
+		}
+		else
+		{
+			if (th->childThread != 0)
+			{
+				PROC_CheckBloodlineForDead(&th->childThread, th->childThread);
+			}
 
-			// dont overwrite replaceSelf like in previous
-			// "if" block, cause the next dead sibling can
-			// still take the place in replaceSelf
+			// This thread survives, so subsequent removals update its sibling link.
+			replaceSelf = &th->siblingThread;
 		}
 
 		th = siblingThread;
@@ -165,30 +137,24 @@ void PROC_CheckBloodlineForDead(struct Thread **replaceSelf, struct Thread *th)
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80041ff4-0x8004205c.
-void PROC_CheckAllForDead()
+void PROC_CheckAllForDead(void)
 {
-	int i;
-
-	struct ThreadBucket *tb = &sdata->gGT->threadBuckets[0];
+	s32 i;
 
 	for (i = 0; i < NUM_BUCKETS; i++)
 	{
-		PROC_CheckBloodlineForDead(&tb[i].thread, tb[i].thread);
+		PROC_CheckBloodlineForDead(&GAME_TRACKER->threadBuckets[i].thread, GAME_TRACKER->threadBuckets[i].thread);
 	}
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8004205c-0x8004228c.
-struct Thread *PROC_BirthWithObject(int flags, void *funcThTick, const char *name, struct Thread *relativeTh)
+struct Thread *PROC_BirthWithObject(ThreadFlags flags, void *funcThTick, const char *name, struct Thread *relativeTh)
 {
-	int bucketID;
-	struct JitPool *stackPool;
+	u32 bucketID;
+	u32 objectSize;
+	u32 stackSize;
 	void *stackObj;
 	struct Thread *th;
-	struct GameTracker *gGT;
-
-	gGT = sdata->gGT;
 
 	// determine bucketID from relativeTh or flags
 	if (relativeTh != 0)
@@ -199,40 +165,42 @@ struct Thread *PROC_BirthWithObject(int flags, void *funcThTick, const char *nam
 	{
 		bucketID = flags & 0xff;
 	}
+	objectSize = flags >> 16;
 
-	// select stack pool based on flags & 0x300
+	// NOTE(aalhendi): Retail allocates from a fixed-capacity pool before validating
+	// the request. Keep the capacities shared with pool initialization.
 	switch (flags & 0x300)
 	{
-	case 0x100: // largeStack
-		stackPool = &gGT->JitPools.largeStack;
+	case LARGE:
+		stackSize = THREAD_LARGE_STACK_SIZE;
+		stackObj = LIST_RemoveFront(&GAME_TRACKER->JitPools.largeStack.free);
 		break;
-	case 0x200: // mediumStack
-		stackPool = &gGT->JitPools.mediumStack;
+	case MEDIUM:
+		stackSize = THREAD_MEDIUM_STACK_SIZE;
+		stackObj = LIST_RemoveFront(&GAME_TRACKER->JitPools.mediumStack.free);
 		break;
-	default: // 0x300 = smallStack
-		stackPool = &gGT->JitPools.smallStack;
+	default:
+		stackSize = THREAD_SMALL_STACK_SIZE;
+		stackObj = LIST_RemoveFront(&GAME_TRACKER->JitPools.smallStack.free);
 		break;
 	}
-
-	// allocate stack object FIRST
-	stackObj = LIST_RemoveFront(&stackPool->free);
 
 	// validate bucket
 	if (bucketID >= NUM_BUCKETS)
 	{
 		if (stackObj != 0)
 		{
-			PROC_DestroyObject((void *)((u32)stackObj + 8), flags);
+			PROC_DestroyObject((u8 *)stackObj + sizeof(struct Item), flags);
 		}
 		return 0;
 	}
 
-	// validate size fits in pool
-	if ((u32)(flags >> 0x10) >= (stackPool->itemSize - 8))
+	// NOTE(aalhendi): Retail rejects an exact payload-capacity request too.
+	if (objectSize >= stackSize - sizeof(struct Item))
 	{
 		if (stackObj != 0)
 		{
-			PROC_DestroyObject((void *)((u32)stackObj + 8), flags);
+			PROC_DestroyObject((u8 *)stackObj + sizeof(struct Item), flags);
 		}
 		return 0;
 	}
@@ -244,119 +212,127 @@ struct Thread *PROC_BirthWithObject(int flags, void *funcThTick, const char *nam
 	}
 
 	// allocate thread SECOND
-	th = (struct Thread *)LIST_RemoveFront(&gGT->JitPools.thread.free);
+	th = (struct Thread *)LIST_RemoveFront(&GAME_TRACKER->JitPools.thread.free);
 
 	// check thread allocated
 	if (th == 0)
 	{
-		PROC_DestroyObject((void *)((u32)stackObj + 8), flags);
+		PROC_DestroyObject((u8 *)stackObj + sizeof(struct Item), flags);
 		return 0;
 	}
 
 	// initialize thread fields
 	th->flags = flags;
 	th->cooldownFrameCount = 0;
-	th->funcThCollide = 0;
 	th->funcThDestroy = 0;
+	th->funcThCollide = 0;
 	th->inst = 0;
 
 	// handle relative thread linking
-	if (relativeTh == 0)
+	if (relativeTh != 0)
 	{
-		struct ThreadBucket *tb = &gGT->threadBuckets[bucketID];
+		if (flags & SELF_SIBLING)
+		{
+			struct Thread *parent;
 
-		th->siblingThread = tb->thread;
-		tb->thread = th;
-		th->parentThread = 0;
-		th->childThread = 0;
-	}
-	else if (flags & SELF_SIBLING)
-	{
-		th->siblingThread = relativeTh->siblingThread;
-		relativeTh->siblingThread = th;
-		th->childThread = 0;
-		th->parentThread = relativeTh->parentThread;
-	}
-	else if (flags & CHILD_BETWEEN)
-	{
-		th->childThread = relativeTh->childThread;
-		relativeTh->childThread = th;
-		th->parentThread = relativeTh;
-		th->siblingThread = 0;
+			th->siblingThread = relativeTh->siblingThread;
+			parent = relativeTh->parentThread;
+			relativeTh->siblingThread = th;
+			th->childThread = 0;
+			th->parentThread = parent;
+		}
+		else if (flags & CHILD_BETWEEN)
+		{
+			// NOTE(aalhendi): Retail inserts the child chain without rewriting
+			// the former children's parentThread pointers.
+			th->childThread = relativeTh->childThread;
+			relativeTh->childThread = th;
+			th->parentThread = relativeTh;
+			th->siblingThread = 0;
+		}
+		else
+		{
+			th->childThread = 0;
+			th->siblingThread = relativeTh->childThread;
+			relativeTh->childThread = th;
+			th->parentThread = relativeTh;
+		}
 	}
 	else
 	{
+		th->siblingThread = GAME_TRACKER->threadBuckets[bucketID].thread;
+		GAME_TRACKER->threadBuckets[bucketID].thread = th;
+		th->parentThread = 0;
 		th->childThread = 0;
-		th->siblingThread = relativeTh->childThread;
-		relativeTh->childThread = th;
-		th->parentThread = relativeTh;
 	}
 
-	// set remaining fields AFTER linking (ASM order)
 	th->funcThTick = funcThTick;
 	th->name = name;
-	th->object = (void *)(((u32)stackObj) + 8);
+	th->object = (u8 *)stackObj + sizeof(struct Item);
 
 	return th;
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8004228c-0x80042348.
 void PROC_CollidePointWithSelf(struct Thread *th, struct BucketSearchParams *buf)
 {
+	register struct BucketSearchParams *results CTR_PSX_REGISTER("$9") = buf;
 	struct Instance *inst;
 	int distX;
 	int distY;
 	int distZ;
-	int dist;
+	register int dist CTR_PSX_REGISTER("$7");
+	int square;
 
 	if ((th->flags & (THREAD_FLAG_DEAD | THREAD_FLAG_DISABLE_COLLISION)) != 0)
 	{
 		return;
 	}
 
+	// NOTE(aalhendi): Keep the result pointer in t1 for the first position load.
+	CTR_PSX_DEPEND_VALUE(results, buf);
 	inst = th->inst;
 
-	// Do not try to optimize this with loops,
-	// it will not compile to less assembly,
-	// 180 bytes is as low as this will go
+	// NOTE(aalhendi): Retail accumulates each squared delta before testing that axis.
 
-	distX = (int)buf->pos.x - (int)inst->matrix.t[0];
-	distY = (int)buf->pos.y - (int)inst->matrix.t[1];
-	distZ = (int)buf->pos.z - (int)inst->matrix.t[2];
+	distX = (int)results->pos.x - (int)inst->matrix.t[0];
+	distY = (int)results->pos.y - (int)inst->matrix.t[1];
+	distZ = (int)results->pos.z - (int)inst->matrix.t[2];
 
-	if (distX * distX >= 0x10000000)
+	dist = CTR_MipsMulLo(distX, distX);
+	if (dist >= 0x10000000)
 	{
 		return;
 	}
-	if (distY * distY >= 0x10000000)
+	square = CTR_MipsMulLo(distY, distY);
+	dist = CTR_MipsAddLo(dist, square);
+	if (square >= 0x10000000)
 	{
 		return;
 	}
-	if (distZ * distZ >= 0x10000000)
+	square = CTR_MipsMulLo(distZ, distZ);
+	dist = CTR_MipsAddLo(dist, square);
+	if (square >= 0x10000000)
 	{
 		return;
 	}
-
-	dist = distX * distX + distY * distY + distZ * distZ;
 
 	// if outside hit radius
-	if (dist >= buf->bestDistSq)
+	if (dist >= results->bestDistSq)
 	{
 		return;
 	}
 
 	// return distance to center
-	buf->bestDistSq = dist;
+	results->bestDistSq = dist;
 
 	// save the thread collided with
-	buf->th = th;
+	results->th = th;
 
-	CTR_SET_VEC3(buf->dist.v, (s16)distX, (s16)distY, (s16)distZ);
+	CTR_SET_VEC3(CTR_VECTOR_DATA(&(results->dist)), (s16)distX, (s16)distY, (s16)distZ);
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80042348-0x80042394.
 void PROC_CollidePointWithBucket(struct Thread *th, struct BucketSearchParams *buf)
 {
 	// only used with drivers colliding
@@ -373,11 +349,12 @@ void PROC_CollidePointWithBucket(struct Thread *th, struct BucketSearchParams *b
 
 // search starts with driver thread's child
 // searches for turbo model
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80042394-0x800423fc.
-struct Thread *PROC_SearchForModel(struct Thread *th, s16 modelID)
+struct Thread *PROC_SearchForModel(struct Thread *th, s32 modelID)
 {
 	while (th != 0)
 	{
+		struct Thread *other;
+
 		// if found, quit
 		if (th->modelIndex == modelID)
 		{
@@ -385,7 +362,7 @@ struct Thread *PROC_SearchForModel(struct Thread *th, s16 modelID)
 		}
 
 		// check children recursively, quit if found
-		struct Thread *other = PROC_SearchForModel(th->childThread, modelID);
+		other = PROC_SearchForModel(th->childThread, modelID);
 		if (other != 0)
 		{
 			return other;
@@ -398,18 +375,14 @@ struct Thread *PROC_SearchForModel(struct Thread *th, s16 modelID)
 }
 
 
-static s32 PROC_PerBspLeaf_MipsSquare(s32 value)
-{
-	return (s32)(u32)((s64)value * (s64)value);
-}
-
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x800423fc-0x80042544
 void PROC_PerBspLeaf_CheckInstances(struct BSP *bspLeaf, struct ScratchpadStruct *sps)
 {
+	// NOTE(aalhendi): Retail holds the scratchpad in s2 and the running squared distance in a2.
+	register struct ScratchpadStruct *params CTR_PSX_REGISTER("$18") = sps;
 	s32 distX;
 	s32 distY;
 	s32 distZ;
-	s32 dist;
+	register s32 dist CTR_PSX_REGISTER("$6");
 	struct BSP *bspHitbox;
 	struct InstDef *instDef;
 	CollThBuckCallback callback;
@@ -427,7 +400,12 @@ void PROC_PerBspLeaf_CheckInstances(struct BSP *bspLeaf, struct ScratchpadStruct
 
 	for (/**/; *(int *)bspHitbox != 0; bspHitbox++)
 	{
-		if ((bspHitbox->flag & BSP_HITBOX_COLLIDABLE) == 0)
+		s32 distYSquared;
+		s32 distZSquared;
+		// NOTE(aalhendi): Keep the radius comparison result in v0 until its branch.
+		register s32 closer CTR_PSX_REGISTER("$2");
+
+		if (((u8)bspHitbox->flag & BSP_HITBOX_COLLIDABLE) == 0)
 		{
 			continue;
 		}
@@ -438,82 +416,109 @@ void PROC_PerBspLeaf_CheckInstances(struct BSP *bspLeaf, struct ScratchpadStruct
 			continue;
 		}
 
-		distX = (int)sps->Input1.pos.x - (int)bspHitbox->data.hitbox.center.x;
-		distY = (int)sps->Input1.pos.y - (int)bspHitbox->data.hitbox.center.y;
-		distZ = (int)sps->Input1.pos.z - (int)bspHitbox->data.hitbox.center.z;
+		distX = (int)params->Input1.pos.x - (int)bspHitbox->data.hitbox.center.x;
+		distY = (int)params->Input1.pos.y - (int)bspHitbox->data.hitbox.center.y;
+		distZ = (int)params->Input1.pos.z - (int)bspHitbox->data.hitbox.center.z;
 
-		dist = PROC_PerBspLeaf_MipsSquare(distX);
+		dist = CTR_MipsMulLo(distX, distX);
 		if (dist > 0x0fffffff)
 		{
 			continue;
 		}
 
-		s32 distYSquared = PROC_PerBspLeaf_MipsSquare(distY);
-		dist += distYSquared;
+		distYSquared = CTR_MipsMulLo(distY, distY);
+		dist = CTR_MipsAddLo(dist, distYSquared);
 		if (distYSquared > 0x0fffffff)
 		{
 			continue;
 		}
 
-		s32 distZSquared = PROC_PerBspLeaf_MipsSquare(distZ);
-		dist += distZSquared;
+		distZSquared = CTR_MipsMulLo(distZ, distZ);
+		dist = CTR_MipsAddLo(dist, distZSquared);
 		if (distZSquared > 0x0fffffff)
 		{
 			continue;
 		}
 
-		if (dist >= sps->Input1.hitRadiusSquared)
+		closer = dist < params->Input1.hitRadiusSquared;
+		if (closer == 0)
 		{
 			continue;
 		}
 
-		CTR_SET_VEC3(sps->Union.ThBuckColl.centerDelta.v, (s16)distX, (s16)distY, (s16)distZ);
-
-		callback = sps->Union.ThBuckColl.funcCallback;
-		callback(sps, bspHitbox);
+		callback = params->Union.ThBuckColl.funcCallback;
+		// NOTE(aalhendi): Retail writes Z and Y before the call, then X in its delay slot.
+		params->Union.ThBuckColl.centerDelta.z = (s16)distZ;
+		params->Union.ThBuckColl.centerDelta.y = (s16)distY;
+		params->Union.ThBuckColl.centerDelta.x = (s16)distX;
+		callback(params, bspHitbox);
 	}
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80042544-0x800425d4
 void PROC_StartSearch_Self(struct ScratchpadStruct *sps)
 {
-	s16 hitRadius;
+	register u32 radius CTR_PSX_REGISTER("$4");
+	register u32 radiusOther CTR_PSX_REGISTER("$5");
+	u32 posA;
+	u32 posB;
 	struct GameTracker *gGT;
+	struct BSP *root;
 
-	hitRadius = sps->Input1.hitRadius;
-
-	sps->Union.ThBuckColl.bbox.min.x = (s16)((u16)sps->Input1.pos.x - (u16)hitRadius);
-	sps->Union.ThBuckColl.bbox.min.y = (s16)((u16)sps->Input1.pos.y - (u16)hitRadius);
-	sps->Union.ThBuckColl.bbox.min.z = (s16)((u16)sps->Input1.pos.z - (u16)hitRadius);
-
-	sps->Union.ThBuckColl.bbox.max.x = (s16)((u16)sps->Input1.pos.x + (u16)hitRadius);
-	sps->Union.ThBuckColl.bbox.max.y = (s16)((u16)sps->Input1.pos.y + (u16)hitRadius);
-	sps->Union.ThBuckColl.bbox.max.z = (s16)((u16)sps->Input1.pos.z + (u16)hitRadius);
-
-	gGT = sdata->gGT;
-
-	COLL_SearchBSP_CallbackPARAM(gGT->level1->ptr_mesh_info->bspRoot, &sps->Union.ThBuckColl.bbox, PROC_PerBspLeaf_CheckInstances, sps);
+	// NOTE(aalhendi): Interleave X/Z/Y in posA with Y/X/Z in posB to retain
+	// retail's load/store order. The independent radius copy spans both lanes;
+	// unsigned arithmetic preserves the low 16 bits stored in each bound.
+	posA = (u16)sps->Input1.pos.x;
+	radius = (u16)sps->Input1.hitRadius;
+	posB = (u16)sps->Input1.pos.y;
+	radiusOther = radius;
+	CTR_PSX_KEEP_VALUE_RELAXED(radiusOther);
+	posA -= radius;
+	sps->Union.ThBuckColl.bbox.min.x = (s16)posA;
+	posA = (u16)sps->Input1.pos.z;
+	posB -= radiusOther;
+	sps->Union.ThBuckColl.bbox.min.y = (s16)posB;
+	posB = (u16)sps->Input1.pos.x;
+	posA -= radius;
+	sps->Union.ThBuckColl.bbox.min.z = (s16)posA;
+	posA = (u16)sps->Input1.pos.y;
+	posB += radiusOther;
+	sps->Union.ThBuckColl.bbox.max.x = (s16)posB;
+	posB = (u16)sps->Input1.pos.z;
+	posA += radius;
+	sps->Union.ThBuckColl.bbox.max.y = (s16)posA;
+	// NOTE(aalhendi): These empty constraints keep late Z and the root load
+	// ahead of call preparation; native retains ordinary C value semantics.
+	CTR_PSX_ORDER_VALUES(posB, radius);
+	gGT = GAME_TRACKER;
+	posB += radiusOther;
+	sps->Union.ThBuckColl.bbox.max.z = (s16)posB;
+	root = gGT->level1->ptr_mesh_info->bspRoot;
+	CTR_PSX_DEPEND_VALUE(sps, root);
+	COLL_SearchBSP_CallbackPARAM(root, &sps->Union.ThBuckColl.bbox, PROC_PerBspLeaf_CheckInstances, sps);
 }
 
 
-static s32 PROC_CollideHitbox_MipsSquare(s32 value)
-{
-	return (s32)(u32)((s64)value * (s64)value);
-}
-
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x800425d4-0x800426f8
 void PROC_CollideHitboxWithBucket(struct Thread *collThread, struct ScratchpadStruct *sps, struct Thread *ignoredThread)
 {
 	s32 distX;
 	s32 distY;
-	s32 distZ;
-	s32 dist;
-	struct Instance *inst;
+	register s32 distZ CTR_PSX_REGISTER("$3");
+	register s32 dist CTR_PSX_REGISTER("$7");
+	// NOTE(aalhendi): Separate Y/Z operands retain retail's position-then-matrix load order.
+	register s32 posY CTR_PSX_REGISTER("$6");
+	register s32 posZ CTR_PSX_REGISTER("$5");
+	register s32 matrixY CTR_PSX_REGISTER("$3");
+	register s32 matrixZ CTR_PSX_REGISTER("$2");
+	register struct Instance *inst CTR_PSX_REGISTER("$4");
 	CollThBuckCallback callback;
 
 	for (/**/; collThread != NULL; collThread = collThread->siblingThread)
 	{
+		s32 distYSquared;
+		s32 distZSquared;
+		register s32 closer CTR_PSX_REGISTER("$2");
+
 		if (collThread->childThread != NULL)
 		{
 			PROC_CollideHitboxWithBucket(collThread->childThread, sps, ignoredThread);
@@ -531,43 +536,52 @@ void PROC_CollideHitboxWithBucket(struct Thread *collThread, struct ScratchpadSt
 
 		inst = collThread->inst;
 
-		distX = (int)sps->Input1.pos.x - inst->matrix.t[0];
-		distY = (int)sps->Input1.pos.y - inst->matrix.t[1];
-		distZ = (int)sps->Input1.pos.z - inst->matrix.t[2];
-
-		dist = PROC_CollideHitbox_MipsSquare(distX);
+		distX = CTR_MipsSubLo((int)sps->Input1.pos.x, inst->matrix.t[0]);
+		dist = CTR_MipsMulLo(distX, distX);
+		posY = (int)sps->Input1.pos.y;
+		posZ = (int)sps->Input1.pos.z;
+		matrixY = inst->matrix.t[1];
+		matrixZ = inst->matrix.t[2];
+		distY = (s32)((u32)posY - (u32)matrixY);
+		distZ = CTR_MipsSubLo(posZ, matrixZ);
+		// NOTE(aalhendi): Keep the Z delta in v1 without a later register move.
+		CTR_PSX_DEPEND_VALUE(distZ, distY);
 		if (dist > 0x0fffffff)
 		{
 			continue;
 		}
 
-		s32 distYSquared = PROC_CollideHitbox_MipsSquare(distY);
-		dist += distYSquared;
+		distYSquared = CTR_MipsMulLo(distY, distY);
+		dist = CTR_MipsAddLo(dist, distYSquared);
 		if (distYSquared > 0x0fffffff)
 		{
 			continue;
 		}
 
-		s32 distZSquared = PROC_CollideHitbox_MipsSquare(distZ);
-		dist += distZSquared;
+		distZSquared = CTR_MipsMulLo(distZ, distZ);
+		dist = CTR_MipsAddLo(dist, distZSquared);
 		if (distZSquared > 0x0fffffff)
 		{
 			continue;
 		}
 
-		if (dist >= sps->Input1.hitRadiusSquared)
+		closer = dist < sps->Input1.hitRadiusSquared;
+		if (closer == 0)
 		{
 			continue;
 		}
 
-		CTR_SET_VEC3(sps->Union.ThBuckColl.centerDelta.v, (s16)distX, (s16)distY, (s16)distZ);
-
+		// NOTE(aalhendi): Retail loads the callback before the delta stores and puts Z in the call delay slot.
 		callback = sps->Union.ThBuckColl.funcCallback;
+		sps->Union.ThBuckColl.centerDelta.x = (s16)distX;
+		sps->Union.ThBuckColl.centerDelta.y = (s16)distY;
+		sps->Union.ThBuckColl.centerDelta.z = (s16)distZ;
 		callback(sps, collThread);
 	}
 }
 
 
+#if defined(CTR_NATIVE)
 enum
 {
 	THTICK_MAX_PENDING = 128
@@ -589,7 +603,6 @@ static void ThTick_PushPending(struct Thread **pending, int *count, struct Threa
 	(*count)++;
 }
 
-#if defined(CTR_NATIVE)
 internal struct Thread *ThTick_RunThreadNative(struct ThTickNativeContext *context, struct Thread *thread)
 {
 	context->currentThread = thread;
@@ -600,20 +613,16 @@ internal struct Thread *ThTick_RunThreadNative(struct ThTickNativeContext *conte
 
 	return context->currentThread;
 }
-#endif
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x800715e8-0x80071694 with native SetAndExec bridge.
 void ThTick_RunBucket(struct Thread *thread)
 {
 	struct Thread *pending[THTICK_MAX_PENDING];
 	int count = 0;
 
-#if defined(CTR_NATIVE)
 	struct ThTickNativeContext context;
 	context.currentThread = NULL;
 	context.prev = s_thTickContext;
 	s_thTickContext = &context;
-#endif
 
 	ThTick_PushPending(pending, &count, thread);
 
@@ -636,34 +645,150 @@ void ThTick_RunBucket(struct Thread *thread)
 
 		if (t->funcThTick != NULL)
 		{
-#if defined(CTR_NATIVE)
 			t = ThTick_RunThreadNative(&context, t);
-#else
-			t->funcThTick(t);
-#endif
 		}
 
 		ThTick_PushPending(pending, &count, t->childThread);
 	}
 
-#if defined(CTR_NATIVE)
 	s_thTickContext = context.prev;
-#endif
 }
+#else
+// NOTE(aalhendi): Retail's bucket walker uses scratchpad 0x1f8000b0..0xe8
+// for saved registers and its pending-thread stack. The assembler inserts
+// nops after symbolic branches here, so branch words retain retail's slots.
+// The final EXE link must keep FastRET adjacent at its retail address.
+__asm__(".section .ThTick_RunBucket,\"ax\",@progbits\n"
+        ".align 2\n"
+        ".ent ThTick_RunBucket\n"
+        ".set noreorder\n"
+        ".set noat\n"
+        ".globl ThTick_RunBucket\n"
+        "ThTick_RunBucket:\n"
+        "lui $1, 0x1f80\n"
+        "sw $16, 0xb0($1)\n"
+        "sw $17, 0xb4($1)\n"
+        "sw $18, 0xb8($1)\n"
+        "sw $19, 0xbc($1)\n"
+        "sw $20, 0xc0($1)\n"
+        "sw $21, 0xc4($1)\n"
+        "sw $22, 0xc8($1)\n"
+        "sw $23, 0xcc($1)\n"
+        "sw $28, 0xd0($1)\n"
+        "sw $29, 0xd4($1)\n"
+        "sw $30, 0xd8($1)\n"
+        "sw $31, 0xdc($1)\n"
+        "sw $4, 0xe8($1)\n"
+        "addiu $2, $1, 4\n"
+        "sw $2, 0xe4($1)\n"
+        ".LThTick_RunBucket_loop:\n"
+        "lw $4, 0xe4($2)\n"
+        "addiu $2, $2, -4\n"
+        "subu $3, $2, $1\n"
+        ".word 0x0460001f # bltz v1, FastRET_restore\n"
+        "sw $2, 0xe4($1)\n"
+        "lw $3, 0x10($4)\n"
+        "lw $8, 0x18($4)\n"
+        ".word 0x10600002 # beqz v1, no_sibling\n"
+        "sw $3, 0xe8($2)\n"
+        "addiu $2, $2, 4\n"
+        ".LThTick_RunBucket_no_sibling:\n"
+        ".word 0x0500fff5 # bltz t0, bucket_loop\n"
+        "sw $2, 0xe4($1)\n"
+        ".word 0x1500000b # bnez t0, decrement\n"
+        "addiu $8, $8, -1\n"
+        "lw $3, 0x2c($4)\n"
+        "nop\n"
+        ".word 0x1060000a # beqz v1, FastRET\n"
+        "nop\n"
+        "jalr $3\n"
+        "sw $4, 0xe0($1)\n"
+        "lui $1, 0x1f80\n"
+        "lw $4, 0xe0($1)\n"
+        ".word 0x04010004 # bgez zero, FastRET\n"
+        "nop\n"
+        ".LThTick_RunBucket_decrement:\n"
+        ".word 0x0401ffe7 # bgez zero, bucket_loop\n"
+        "sw $8, 0x18($4)\n"
+        "sw $5, 0x2c($4)\n"
+        ".end ThTick_RunBucket\n"
+        ".set at\n"
+        ".set reorder\n"
+        ".text\n");
+#endif
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80071694-0x800716ec as native-equivalent divergence.
+#ifndef CTR_NATIVE
+// NOTE(aalhendi): The first eight instructions resume RunBucket's scratchpad
+// queue. The register-restore tail is also RunBucket's shared exit target.
+// PC-relative branch words preserve both delay-slot instructions.
+__asm__(".section .ThTick_FastRET,\"ax\",@progbits\n"
+        ".align 2\n"
+        ".ent ThTick_FastRET\n"
+        ".set noreorder\n"
+        ".set noat\n"
+        ".globl ThTick_FastRET\n"
+        "ThTick_FastRET:\n"
+        "lui $1, 0x1f80\n"
+        "lw $3, 0x14($4)\n"
+        "lw $2, 0xe4($1)\n"
+        "lw $29, 0xd4($1)\n"
+        ".word 0x1060ffe0 # beqz v1, RunBucket_loop\n"
+        "sw $3, 0xe8($2)\n"
+        ".word 0x0401ffde # bgez zero, RunBucket_loop\n"
+        "addiu $2, $2, 4\n"
+        ".LThTick_FastRET_restore:\n"
+        "lw $31, 0xdc($1)\n"
+        "lw $30, 0xd8($1)\n"
+        "lw $29, 0xd4($1)\n"
+        "lw $28, 0xd0($1)\n"
+        "lw $23, 0xcc($1)\n"
+        "lw $22, 0xc8($1)\n"
+        "lw $21, 0xc4($1)\n"
+        "lw $20, 0xc0($1)\n"
+        "lw $19, 0xbc($1)\n"
+        "lw $18, 0xb8($1)\n"
+        "lw $17, 0xb4($1)\n"
+        "lw $16, 0xb0($1)\n"
+        "jr $31\n"
+        "nop\n"
+        ".end ThTick_FastRET\n"
+        ".set at\n"
+        ".set reorder\n"
+        ".text\n");
+#else
 void ThTick_FastRET(struct Thread *thread)
 {
 	(void)thread;
 }
+#endif
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x800716ec-0x80071704 with native SetAndExec bridge.
+#ifndef CTR_NATIVE
+// NOTE(aalhendi): Retail restores ThTick_RunBucket's stack from scratchpad
+// 0x1f8000d4, then resumes it at 0x80071678 after the replacement tick.
+// This nonlocal jump has no ordinary C equivalent.
+__asm__(".section .ThTick_SetAndExec,\"ax\",@progbits\n"
+        ".align 2\n"
+        ".ent ThTick_SetAndExec\n"
+        ".set noreorder\n"
+        ".set noat\n"
+        ".globl ThTick_SetAndExec\n"
+        "ThTick_SetAndExec:\n"
+        "lui $1, 0x1f80\n"
+        "lw $29, 0xd4($1)\n"
+        "lui $31, 0x8007\n"
+        "ori $31, $31, 0x1678\n"
+        "jr $5\n"
+        "sw $5, 0x2c($4)\n"
+        ".end ThTick_SetAndExec\n"
+        ".set at\n"
+        ".set reorder\n"
+        ".text\n");
+#else
 void ThTick_SetAndExec(struct Thread *thread, void (*funcThTick)(struct Thread *))
 {
 	thread->funcThTick = funcThTick;
 	funcThTick(thread);
 
-#if defined(CTR_NATIVE)
 	// NOTE(aalhendi): Retail restores the ThTick_RunBucket stack from
 	// scratchpad after the replacement tick returns. Native must not resume the
 	// stale caller that requested the tick switch.
@@ -671,10 +796,9 @@ void ThTick_SetAndExec(struct Thread *thread, void (*funcThTick)(struct Thread *
 	{
 		longjmp(s_thTickContext->env, 1);
 	}
-#endif
 }
+#endif
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80071704-0x8007170c.
 void ThTick_Set(struct Thread *thread, void (*funcThTick)(struct Thread *))
 {
 	thread->funcThTick = funcThTick;

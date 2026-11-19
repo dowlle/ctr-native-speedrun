@@ -19,7 +19,13 @@
 // The read-only surface lives in its own named section so an external tool can
 // find it by section rather than by a hardcoded offset. The static initializer
 // keeps the magic and ABI version present even before the first frame.
-__attribute__((section(".ctrsr"), used)) global_variable struct NativeSpeedrunSurface g_ctr_speedrun_surface = {
+#if defined(_MSC_VER)
+#pragma section(".ctrsr", read, write)
+__declspec(allocate(".ctrsr"))
+#else
+__attribute__((section(".ctrsr"), used))
+#endif
+global_variable struct NativeSpeedrunSurface g_ctr_speedrun_surface = {
     .magic = NATIVE_SPEEDRUN_SURFACE_MAGIC,
     .abiVersion = NATIVE_SPEEDRUN_ABI_VERSION,
 };

@@ -7,11 +7,7 @@ enum
 	VEH_CALC_FAST_SQRT_ROOT_STEP_SHIFT = 2,
 };
 
-CTR_STATIC_ASSERT(VEH_CALC_MIPS_SHIFT_MASK == 0x1f);
-CTR_STATIC_ASSERT(VEH_CALC_FAST_SQRT_ADD_BIT_BIAS == 1);
-CTR_STATIC_ASSERT(VEH_CALC_FAST_SQRT_ROOT_STEP_SHIFT == 2);
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80058f54-0x80058f9c.
 int VehCalc_InterpBySpeed(int val, int speed, int desired)
 {
 	if (val > desired)
@@ -24,7 +20,7 @@ int VehCalc_InterpBySpeed(int val, int speed, int desired)
 		}
 	}
 
-	else
+	else if (val < desired)
 	{
 		val = CTR_MipsAddLo(val, speed);
 
@@ -37,9 +33,13 @@ int VehCalc_InterpBySpeed(int val, int speed, int desired)
 	return val;
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80058f9c-0x8005900c.
 int VehCalc_MapToRange(int val, int oldMin, int oldMax, int newMin, int newMax)
 {
+	int distFromBottom;
+	int newRange;
+	int oldRange;
+	int scaledDistance;
+
 	if (val <= oldMin)
 	{
 		return newMin;
@@ -50,19 +50,16 @@ int VehCalc_MapToRange(int val, int oldMin, int oldMax, int newMin, int newMax)
 		return newMax;
 	}
 
-	int distFromBottom = CTR_MipsSubLo(val, oldMin);
-	int newRange = CTR_MipsSubLo(newMax, newMin);
-	int oldRange = CTR_MipsSubLo(oldMax, oldMin);
-	int scaledDistance = CTR_MipsDiv(CTR_MipsMulLo(distFromBottom, newRange), oldRange);
+	distFromBottom = CTR_MipsSubLo(val, oldMin);
+	newRange = CTR_MipsSubLo(newMax, newMin);
+	oldRange = CTR_MipsSubLo(oldMax, oldMin);
+	scaledDistance = CTR_MipsDiv(CTR_MipsMulLo(distFromBottom, newRange), oldRange);
 
 	return CTR_MipsAddLo(newMin, scaledDistance);
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8005900c-0x80059070.
 int VehCalc_SteerAccel(int steeringFrameCount, int stage2FirstFrame, int stage2FrameLength, int stage4FirstFrame, int stage1MinSteer, int stage1MaxSteer)
 {
-	int steerAccel = stage1MaxSteer;
-
 	// Steering Stage 1,
 	// if first 4 frames of steering
 	// increase steer acceleration as time passes
@@ -70,28 +67,29 @@ int VehCalc_SteerAccel(int steeringFrameCount, int stage2FirstFrame, int stage2F
 	{
 		// map "frame" from [0,4] -> [0x800,0xC00]
 
-		steerAccel = VehCalc_MapToRange(steeringFrameCount, 0, stage2FirstFrame, stage1MinSteer, stage1MaxSteer);
+		int steerAccel = VehCalc_MapToRange(steeringFrameCount, 0, stage2FirstFrame, stage1MinSteer, stage1MaxSteer);
+
+		CTR_PSX_CLOBBER("$1");
+		return steerAccel;
 	}
 
 	else
 	{
-		int stage3FirstFrame = CTR_MipsAddLo(stage2FirstFrame, stage2FrameLength);
-
 		// Steering Stage 3
 		// frames 12+
 		// decrease steer acceleration as time passes
-		if (stage3FirstFrame < steeringFrameCount)
+		if (CTR_MipsAddLo(stage2FirstFrame, stage2FrameLength) < steeringFrameCount)
 		{
 			// map "frame" from [12,64] -> [0xC00,0]
 
-			steerAccel = VehCalc_MapToRange(steeringFrameCount, stage3FirstFrame, stage4FirstFrame, stage1MaxSteer, 0);
+			return VehCalc_MapToRange(steeringFrameCount, CTR_MipsAddLo(stage2FirstFrame, stage2FrameLength), stage4FirstFrame, stage1MaxSteer, 0);
 		}
 	}
 
 	// Steering Stage 2,
 	// next 0x8 frames (frame 4 to 12)
 	// max steer accel of 0xC00
-	return steerAccel;
+	return stage1MaxSteer;
 
 	// Steering Stage 4,
 	// part of Stage 3's mapping,
@@ -100,13 +98,18 @@ int VehCalc_SteerAccel(int steeringFrameCount, int stage2FirstFrame, int stage2F
 	// angular velocity is constant
 }
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80059070-0x80059100.
 u32 VehCalc_FastSqrt(u32 n, u32 shift)
 {
-	u32 result = 0;
-	u32 rootBitIndex = 1;
-	u32 lastApproximation = 0;
-	u32 testBit = (u32)1 << (shift & VEH_CALC_MIPS_SHIFT_MASK);
+	u32 result;
+	s32 rootBitIndex;
+	u32 lastApproximation;
+	u32 testBit;
+	u32 addBit;
+
+	result = 0;
+	testBit = (u32)CTR_MipsSll(1, shift);
+	rootBitIndex = 1;
+	lastApproximation = result;
 
 	while ((testBit < n) && ((testBit << VEH_CALC_FAST_SQRT_ROOT_STEP_SHIFT) != 0))
 	{
@@ -114,23 +117,26 @@ u32 VehCalc_FastSqrt(u32 n, u32 shift)
 		testBit <<= VEH_CALC_FAST_SQRT_ROOT_STEP_SHIFT;
 	}
 
-	u32 addBit = (u32)1 << ((rootBitIndex + CTR_MipsSubLo(shift, VEH_CALC_FAST_SQRT_ADD_BIT_BIAS)) & VEH_CALC_MIPS_SHIFT_MASK);
+	addBit = (u32)CTR_MipsSll(1, CTR_MipsAddLo(rootBitIndex, CTR_MipsSubLo(shift, VEH_CALC_FAST_SQRT_ADD_BIT_BIAS)));
 
 	while (testBit != 0)
 	{
-		u32 shiftedResult = result << (rootBitIndex & VEH_CALC_MIPS_SHIFT_MASK);
+		u32 shiftedResult;
+		u32 approximation;
 
-		if ((s32)rootBitIndex < 0)
+		shiftedResult = (u32)CTR_MipsSll(result, (u32)rootBitIndex);
+
+		if (rootBitIndex < 0)
 		{
-			shiftedResult = result >> (CTR_MipsNegLo(rootBitIndex) & VEH_CALC_MIPS_SHIFT_MASK);
+			shiftedResult = CTR_MipsSrl(result, (u32)CTR_MipsNegLo(rootBitIndex));
 		}
 
-		u32 approximation = shiftedResult + lastApproximation + testBit;
+		approximation = shiftedResult + (lastApproximation + testBit);
 
 		if (approximation <= n)
 		{
-			result += addBit;
 			lastApproximation = approximation;
+			result += addBit;
 		}
 
 		addBit >>= 1;

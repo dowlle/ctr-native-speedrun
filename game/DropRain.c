@@ -1,14 +1,14 @@
 #include <common.h>
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x80024464-0x8002451c.
 void DropRain_MakeSound(struct GameTracker *gGT)
 {
 	int i, lev;
 	u32 rained;
 
 	rained = 0;
-	lev = gGT->levelID;
+	// NOTE(aalhendi): Retail gates the effect using the active tracker; the rain buffers still come from the passed tracker.
+	lev = GAME_TRACKER->levelID;
 
 	// if you are not in
 	if ((lev != TIGER_TEMPLE) && (lev != CORTEX_CASTLE))
@@ -44,7 +44,6 @@ void DropRain_MakeSound(struct GameTracker *gGT)
 }
 
 
-// NOTE(aalhendi): ASM-verified NTSC-U 926 0x8002451c-0x80024524.
 void DropRain_Reset(struct GameTracker *gGT)
 {
 	gGT->rainSoundID = 0;
